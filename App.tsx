@@ -5,6 +5,7 @@ import { COLUMNS } from './constants';
 import Column from './components/Column';
 import NotebookModal from './components/NotebookModal';
 import AuthView from './components/AuthView';
+import LandingPage from './components/LandingPage';
 import { initDb, fetchUserSkills, upsertSkill, removeSkill } from './db';
 import { GoogleGenAI } from "@google/genai";
 
@@ -16,6 +17,8 @@ const App: React.FC = () => {
   const [newSkillName, setNewSkillName] = useState('');
   const [draggedSkill, setDraggedSkill] = useState<Skill | null>(null);
   const [activeSkillId, setActiveSkillId] = useState<string | null>(null);
+  const [showAuth, setShowAuth] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
 
   // Initialize DB and Check Session
   useEffect(() => {
@@ -36,6 +39,7 @@ const App: React.FC = () => {
   const handleAuthenticated = async (u: User) => {
     localStorage.setItem('skillquest-session', JSON.stringify(u));
     setUser(u);
+    setShowAuth(false);
     const data = await fetchUserSkills(u.id);
     setSkills(data);
   };
@@ -44,6 +48,7 @@ const App: React.FC = () => {
     localStorage.removeItem('skillquest-session');
     setUser(null);
     setSkills([]);
+    setShowAuth(false);
   };
 
   const addSkill = async (e: React.FormEvent) => {
@@ -122,8 +127,34 @@ const App: React.FC = () => {
   };
 
   if (isLoading) return null;
-  if (!user) return <AuthView onAuthenticated={handleAuthenticated} />;
 
+  // Unauthenticated View
+  if (!user) {
+    return (
+      <>
+        <LandingPage 
+          onLoginClick={() => { setAuthMode('login'); setShowAuth(true); }}
+          onSignupClick={() => { setAuthMode('signup'); setShowAuth(true); }}
+        />
+        {showAuth && (
+          <div className="fixed inset-0 z-[100] animate-in fade-in duration-300">
+            <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm" onClick={() => setShowAuth(false)}></div>
+            <div className="relative z-10 h-full w-full">
+               <AuthView onAuthenticated={handleAuthenticated} />
+               <button 
+                onClick={() => setShowAuth(false)}
+                className="fixed top-6 right-6 z-[110] p-3 rounded-full bg-slate-800 text-white hover:bg-slate-700 transition-all"
+               >
+                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+               </button>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  // Authenticated View
   const activeSkill = skills.find(s => s.id === activeSkillId);
 
   return (
