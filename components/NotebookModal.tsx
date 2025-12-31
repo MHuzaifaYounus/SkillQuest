@@ -65,7 +65,8 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
     if (isGenerating) return;
     setIsGenerating(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const apiKey = process.env.API_KEY || '';
+      const ai = new GoogleGenAI({ apiKey });
       let levelDefaultContext = skill.level === SkillLevel.DAILY ? "Standard: Day 1, Day 2..." : skill.level === SkillLevel.WEEKLY ? "Standard: Week 1, Week 2..." : "Standard: Monthly/Passive checkpoints.";
       const prompt = `Skill: ${skill.name}. Tier: ${skill.level}. User: ${aiPrompt || 'Complete guide'}. ${levelDefaultContext}`;
       const response = await ai.models.generateContent({
@@ -85,11 +86,17 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
           }
         }
       });
-      const data = JSON.parse(response.text);
+      
+      const responseText = response.text;
+      if (!responseText) throw new Error("Empty AI response");
+
+      const data = JSON.parse(responseText);
       const newItems: ChecklistItem[] = data.checklist.map((item: any) => ({ id: crypto.randomUUID(), text: item.title, description: item.description, completed: false }));
-      setContent(aiPrompt.trim() ? `## 🛠 Custom Strategy\n\n` + data.notes : data.notes);
+      const newNotes = aiPrompt.trim() ? `## 🛠 Custom Strategy\n\n` + data.notes : data.notes;
+      
+      setContent(newNotes);
       setChecklist(newItems);
-      onUpdate(skill.id, { notes: content, icon: data.icon, checklist: newItems });
+      onUpdate(skill.id, { notes: newNotes, icon: data.icon, checklist: newItems });
       setAiPrompt('');
       setViewMode('checklist');
     } catch (error) { console.error(error); } finally { setIsGenerating(false); }

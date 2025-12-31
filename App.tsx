@@ -41,7 +41,8 @@ const App: React.FC = () => {
     setNewSkillName('');
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const apiKey = process.env.API_KEY || '';
+      const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
         model: 'gemini-flash-lite-latest',
         contents: `Assign a single relevant emoji icon for a skill named "${name}". Return only the emoji.`,
