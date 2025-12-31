@@ -86,30 +86,30 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
 
       switch(targetLevel) {
         case SkillLevel.DAILY:
-          levelSpecificInstructions = "You are designing a BEGINNER'S KICKSTART. Focus on high-frequency habit building. Create a roadmap that breaks down the first 7 days of practice.";
-          checklistConstraint = "The checklist MUST be formatted as 'Day 1: [Task]', 'Day 2: [Task]', up to 'Day 7: [Task]'. Each task must be a simple daily habit drill.";
+          levelSpecificInstructions = "Design a 7-DAY BEGINNER'S KICKSTART. Focus on foundational habit formation and simple daily drills to build neural pathways.";
+          checklistConstraint = "The checklist MUST contain EXACTLY 7 items. Format titles exactly as: 'Day 1: [Task]', 'Day 2: [Task]', up to 'Day 7: [Task]'. Tasks must be simple, actionable daily exercises.";
           break;
         case SkillLevel.WEEKLY:
-          levelSpecificInstructions = "You are designing an INTERMEDIATE WEEKLY SPHERE. Focus on complexity and project-based learning. Create a 4-week progression roadmap.";
-          checklistConstraint = "The checklist MUST be formatted as 'Week 1: [Milestone]', up to 'Week 4: [Milestone]'. Each task must represent a deep-dive session or a complex sub-skill.";
+          levelSpecificInstructions = "Design a 4-WEEK INTERMEDIATE SPRINT. Focus on project-based learning and applying fundamentals to complex scenarios.";
+          checklistConstraint = "The checklist MUST contain EXACTLY 4 items. Format titles exactly as: 'Week 1: [Objective]', 'Week 2: [Objective]', up to 'Week 4: [Objective]'. Tasks must be significant weekly milestones.";
           break;
         case SkillLevel.MONTHLY:
-          levelSpecificInstructions = "You are designing an ADVANCED MASTERY audit. Focus on theoretical deep dives and advanced performance optimization.";
-          checklistConstraint = "The checklist must be 3-5 high-level 'Mastery Audits' or major milestones that require significant time to cross off.";
+          levelSpecificInstructions = "Design an ADVANCED MASTERY ROADMAP. Focus on architectural understanding, optimization, and advanced theoretical deep-dives.";
+          checklistConstraint = "The checklist should feature 3-5 high-level 'Mastery Audits' or deep-dive research projects that represent significant progress.";
           break;
         case SkillLevel.PASSIVE:
-          levelSpecificInstructions = "You are designing a MASTER'S RETENTION STRATEGY. Focus on preventing skill decay through minimal effort 'Keep-Alive' triggers.";
-          checklistConstraint = "The checklist should consist of 3-5 'Maintenance Triggers' (e.g., 'Bi-Monthly Review', 'Subconscious Recall Drill'). These are tasks intended to stay valid long-term.";
+          levelSpecificInstructions = "Design a MASTER'S RETENTION STRATEGY. Focus on 'Keep-Alive' triggers and subconscious recall to prevent skill decay with minimal active effort.";
+          checklistConstraint = "The checklist should consist of 3-5 'Maintenance Triggers' (e.g., 'Bi-Monthly Refresh', 'Subconscious Audit'). These are long-term recurring tasks.";
           break;
       }
 
-      const userContext = aiPrompt.trim() ? `Additional user context: "${aiPrompt}".` : "Generate a standard professional growth plan.";
-      const prompt = `Skill: ${skill.name}. Tier: ${getLevelDisplay(targetLevel)}.
+      const userContext = aiPrompt.trim() ? `Incorporate these user goals: "${aiPrompt}".` : "Follow standard professional growth protocols.";
+      const prompt = `Skill: ${skill.name}. Current Tier: ${getLevelDisplay(targetLevel)}.
       
-      MISSION:
+      INSTRUCTIONS:
       ${levelSpecificInstructions}
       
-      CONSTRAINT:
+      FORMATTING RULES:
       ${checklistConstraint}
       
       CONTEXT:
@@ -119,19 +119,10 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
         model: 'gemini-3-pro-preview',
         contents: prompt,
         config: {
-          systemInstruction: `You are an elite skill acquisition architect with expertise in neural habit formation.
-          Respond ONLY in JSON format.
-          
-          JSON Structure:
-          {
-            "notes": "A highly detailed professional markdown roadmap including objectives and philosophy.",
-            "icon": "One single relevant emoji",
-            "checklist": [
-              { "title": "Day X: Task Title", "description": "Short specific instructions" }
-            ]
-          }
-          
-          CRITICAL: Adhere strictly to the requested checklist format (e.g., Day 1, Week 1, etc.) as specified in the MISSION instructions.`,
+          systemInstruction: `You are a high-level skill acquisition architect. 
+          Return ONLY valid JSON. 
+          The 'notes' field should be a professional markdown guide. 
+          The 'checklist' field must follow the EXACT titling rules provided (Day 1, Week 1, etc. where applicable).`,
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
@@ -209,7 +200,6 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
               <h2 className="text-base md:text-xl font-black text-white truncate">{skill.name}</h2>
               <div className="flex items-center gap-1.5">
                 <span className="text-[8px] md:text-[10px] px-1.5 py-0.5 rounded font-black uppercase bg-blue-500/10 text-blue-400">{getLevelDisplay(skill.level)}</span>
-                <span className="text-[8px] text-slate-600 font-black uppercase tracking-tighter hidden xs:block">{isSaving ? 'Syncing...' : 'Encrypted'}</span>
               </div>
             </div>
           </div>
@@ -243,7 +233,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
                 type="text" 
                 value={aiPrompt}
                 onChange={(e) => setAiPrompt(e.target.value)}
-                placeholder={isGenerating ? `Architecting ${getLevelDisplay(skill.level)} path...` : `Add specific goals for this ${skill.level} phase...`}
+                placeholder={isGenerating ? `Architecting ${getLevelDisplay(skill.level)}...` : `Customize this ${skill.level} plan...`}
                 disabled={isGenerating}
                 className="w-full bg-transparent border-none text-slate-100 placeholder:text-slate-700 focus:ring-0 outline-none text-xs md:text-sm font-semibold"
               />
@@ -262,7 +252,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
               ) : (
                 <>
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v18"/><path d="m19 14-7 7-7-7"/></svg>
-                  Generate {skill.level} Plan
+                  Generate Plan
                 </>
               )}
             </button>
@@ -278,7 +268,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
               value={content}
               onChange={(e) => setContent(e.target.value)}
               className="w-full h-full bg-transparent border-none focus:ring-0 outline-none text-slate-200 text-base md:text-lg leading-relaxed resize-none font-medium p-0"
-              placeholder="Start drafting notes manually..."
+              placeholder="Manual entry..."
             />
           )}
 
@@ -286,7 +276,6 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
             <div className="prose-custom max-w-none">
               {content ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown> : (
                 <div className="flex flex-col items-center justify-center py-20 text-slate-700">
-                   <svg className="w-16 h-16 mb-4 opacity-10" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
                    <p className="uppercase font-black tracking-[0.2em] text-[10px]">No Strategy Drafted</p>
                 </div>
               )}
@@ -298,7 +287,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
               <div className="flex items-center justify-between gap-4">
                 <div className="min-w-0">
                   <h3 className="text-lg md:text-2xl font-black text-white leading-tight truncate">Tier Milestones</h3>
-                  <p className="text-[10px] md:text-sm text-slate-500 font-bold uppercase tracking-tighter">Current Phase: {getLevelDisplay(skill.level)}</p>
+                  <p className="text-[10px] md:text-sm text-slate-500 font-bold uppercase tracking-tighter">{getLevelDisplay(skill.level)} Phase</p>
                 </div>
                 <div className="shrink-0 text-right">
                   <div className={`text-2xl md:text-4xl font-black transition-all ${progressPercent === 100 ? 'text-emerald-400' : 'text-blue-500'}`}>{progressPercent}%</div>
@@ -313,7 +302,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
                     onClick={() => !isGenerating && toggleChecklistItem(item.id)}
                     className={`flex items-start gap-3 md:gap-4 p-4 md:p-5 rounded-xl md:rounded-2xl border transition-all cursor-pointer ${item.completed ? 'bg-emerald-500/5 border-emerald-500/10 opacity-60' : 'bg-slate-800/40 border-slate-800 hover:bg-slate-800/60'} ${isGenerating ? 'cursor-wait pointer-events-none' : ''}`}
                   >
-                    <div className={`mt-0.5 w-5 h-5 md:w-6 md:h-6 rounded-lg border-2 flex items-center justify-center shrink-0 transition-all ${item.completed ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-slate-700 group-hover:border-blue-500'}`}>
+                    <div className={`mt-0.5 w-5 h-5 md:w-6 md:h-6 rounded-lg border-2 flex items-center justify-center shrink-0 transition-all ${item.completed ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-slate-700'}`}>
                       {item.completed && <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>}
                     </div>
                     <div className="min-w-0">
@@ -325,7 +314,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
                 {checklist.length === 0 && !isGenerating && (
                   <div className="text-center py-20 border-2 border-dashed border-slate-800 rounded-3xl group cursor-pointer hover:border-slate-700 transition-colors" onClick={() => performAiGeneration(skill.level)}>
                     <div className="text-slate-700 uppercase font-black tracking-widest text-xs mb-2">Checklist Empty</div>
-                    <p className="text-[10px] font-bold text-slate-800 uppercase tracking-tighter">Click to Generate {getLevelDisplay(skill.level)} path</p>
+                    <p className="text-[10px] font-bold text-slate-800 uppercase tracking-tighter">Click to Generate Path</p>
                   </div>
                 )}
               </div>
@@ -342,7 +331,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
                 <div className="flex flex-col items-center gap-4">
                   <div className="flex items-center gap-2 text-slate-500 text-xs font-black uppercase tracking-[0.2em]">
                     <svg className="animate-spin w-4 h-4 text-purple-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                    Regenerating Tier Milestones...
+                    Re-Architecting Tier...
                   </div>
                 </div>
               </div>
@@ -356,7 +345,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
              <span>{content.length} CHARS</span>
              {checklist.length > 0 && <span className="text-blue-500">{checklist.filter(i => i.completed).length}/{checklist.length} DONE</span>}
           </div>
-          <span className="text-slate-700">Gemini 3 Pro Auto-Architect</span>
+          <span className="text-slate-700">Gemini Pro Architect</span>
         </div>
       </div>
     </div>

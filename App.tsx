@@ -165,7 +165,7 @@ const App: React.FC = () => {
              </div>
              <div className="w-px h-6 md:h-8 bg-slate-800 self-center"></div>
              <div className="flex flex-col items-end">
-               <span className="text-[10px] text-slate-600 font-black uppercase">Daily</span>
+               <span className="text-[10px] text-slate-600 font-black uppercase">Beginner</span>
                <span className="text-xs md:text-sm font-black text-blue-400">{skills.filter(s => s.level === SkillLevel.DAILY).length}</span>
              </div>
           </div>
