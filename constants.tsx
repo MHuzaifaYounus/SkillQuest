@@ -5,7 +5,7 @@ import { SkillLevel, Column } from './types';
 export const COLUMNS: Column[] = [
   {
     id: SkillLevel.DAILY,
-    title: 'Level 1: Daily',
+    title: 'Beginner - Daily',
     description: 'High frequency active practice.',
     color: 'border-blue-500/30 text-blue-400 bg-blue-500/5',
     icon: (
@@ -14,7 +14,7 @@ export const COLUMNS: Column[] = [
   },
   {
     id: SkillLevel.WEEKLY,
-    title: 'Level 2: Weekly',
+    title: 'Intermediate - Weekly',
     description: 'Consistent recurring sessions.',
     color: 'border-purple-500/30 text-purple-400 bg-purple-500/5',
     icon: (
@@ -23,7 +23,7 @@ export const COLUMNS: Column[] = [
   },
   {
     id: SkillLevel.MONTHLY,
-    title: 'Level 3: Monthly',
+    title: 'Advanced - Monthly',
     description: 'Deep dive maintenance.',
     color: 'border-emerald-500/30 text-emerald-400 bg-emerald-500/5',
     icon: (
@@ -32,7 +32,7 @@ export const COLUMNS: Column[] = [
   },
   {
     id: SkillLevel.PASSIVE,
-    title: 'Level 4: Passive',
+    title: 'Master - Passive',
     description: 'Subconscious retention.',
     color: 'border-amber-500/30 text-amber-400 bg-amber-500/5',
     icon: (

@@ -1,5 +1,4 @@
 
-// Import React to resolve 'Cannot find namespace React' error when using React.ReactNode
 import React from 'react';
 
 export enum SkillLevel {
@@ -16,8 +15,14 @@ export interface ChecklistItem {
   completed: boolean;
 }
 
+export interface User {
+  id: string;
+  email: string;
+}
+
 export interface Skill {
   id: string;
+  user_id?: string;
   name: string;
   level: SkillLevel;
   createdAt: number;

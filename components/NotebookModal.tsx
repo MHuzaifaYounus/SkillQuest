@@ -20,6 +20,16 @@ const getNextLevel = (current: SkillLevel): SkillLevel | null => {
   }
 };
 
+const getLevelDisplay = (level: SkillLevel) => {
+  switch (level) {
+    case SkillLevel.DAILY: return "Beginner - Daily";
+    case SkillLevel.WEEKLY: return "Intermediate - Weekly";
+    case SkillLevel.MONTHLY: return "Advanced - Monthly";
+    case SkillLevel.PASSIVE: return "Master - Passive";
+    default: return level;
+  }
+};
+
 const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate }) => {
   const [content, setContent] = useState(skill.notes || '');
   const [checklist, setChecklist] = useState<ChecklistItem[]>(skill.checklist || []);
@@ -72,41 +82,56 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
       const ai = new GoogleGenAI({ apiKey });
       
       let levelSpecificInstructions = "";
+      let checklistConstraint = "";
+
       switch(targetLevel) {
         case SkillLevel.DAILY:
-          levelSpecificInstructions = "Design a DAILY routine. Tasks MUST be small, repeatable, and focused on fundamental muscle memory or habit building. Think 'Daily Drills'.";
+          levelSpecificInstructions = "You are designing a BEGINNER'S KICKSTART. Focus on high-frequency habit building. Create a roadmap that breaks down the first 7 days of practice.";
+          checklistConstraint = "The checklist MUST be formatted as 'Day 1: [Task]', 'Day 2: [Task]', up to 'Day 7: [Task]'. Each task must be a simple daily habit drill.";
           break;
         case SkillLevel.WEEKLY:
-          levelSpecificInstructions = "Design a WEEKLY schedule. Tasks should be larger milestones, complex projects, or deep-dive sessions that happen once or twice a week.";
+          levelSpecificInstructions = "You are designing an INTERMEDIATE WEEKLY SPHERE. Focus on complexity and project-based learning. Create a 4-week progression roadmap.";
+          checklistConstraint = "The checklist MUST be formatted as 'Week 1: [Milestone]', up to 'Week 4: [Milestone]'. Each task must represent a deep-dive session or a complex sub-skill.";
           break;
         case SkillLevel.MONTHLY:
-          levelSpecificInstructions = "Design a MONTHLY review system. Tasks should focus on advanced mastery, auditing progress, and high-level conceptual breakthroughs.";
+          levelSpecificInstructions = "You are designing an ADVANCED MASTERY audit. Focus on theoretical deep dives and advanced performance optimization.";
+          checklistConstraint = "The checklist must be 3-5 high-level 'Mastery Audits' or major milestones that require significant time to cross off.";
           break;
         case SkillLevel.PASSIVE:
-          levelSpecificInstructions = "Design a MAINTENANCE strategy. Tasks should be low-effort 'check-ins' to ensure the skill remains subconscious and doesn't decay.";
+          levelSpecificInstructions = "You are designing a MASTER'S RETENTION STRATEGY. Focus on preventing skill decay through minimal effort 'Keep-Alive' triggers.";
+          checklistConstraint = "The checklist should consist of 3-5 'Maintenance Triggers' (e.g., 'Bi-Monthly Review', 'Subconscious Recall Drill'). These are tasks intended to stay valid long-term.";
           break;
       }
 
-      const userContext = aiPrompt.trim() ? `Additional user context: "${aiPrompt}".` : "No specific context provided, generate a standard roadmap.";
-      const prompt = `Skill: ${skill.name}. Current Mastery Tier: ${targetLevel.toUpperCase()}. ${levelSpecificInstructions} ${userContext}`;
+      const userContext = aiPrompt.trim() ? `Additional user context: "${aiPrompt}".` : "Generate a standard professional growth plan.";
+      const prompt = `Skill: ${skill.name}. Tier: ${getLevelDisplay(targetLevel)}.
+      
+      MISSION:
+      ${levelSpecificInstructions}
+      
+      CONSTRAINT:
+      ${checklistConstraint}
+      
+      CONTEXT:
+      ${userContext}`;
       
       const response = await ai.models.generateContent({
         model: 'gemini-3-pro-preview',
         contents: prompt,
         config: {
-          systemInstruction: `You are an elite skill acquisition architect. 
+          systemInstruction: `You are an elite skill acquisition architect with expertise in neural habit formation.
           Respond ONLY in JSON format.
           
           JSON Structure:
           {
-            "notes": "A comprehensive markdown roadmap for this specific level",
+            "notes": "A highly detailed professional markdown roadmap including objectives and philosophy.",
             "icon": "One single relevant emoji",
             "checklist": [
-              { "title": "Specific Task Name", "description": "Clear instructions for this specific mastery tier" }
+              { "title": "Day X: Task Title", "description": "Short specific instructions" }
             ]
           }
           
-          CRITICAL: If the level is DAILY, the checklist MUST be daily actions. If WEEKLY, it must be weekly goals. The Roadmap (notes) must be highly detailed and professional.`,
+          CRITICAL: Adhere strictly to the requested checklist format (e.g., Day 1, Week 1, etc.) as specified in the MISSION instructions.`,
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
@@ -141,7 +166,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
         completed: false 
       }));
       
-      const prefix = isLevelUpAuto ? `## 🚀 Tier Ascended: ${targetLevel.toUpperCase()}\n\n` : "";
+      const prefix = isLevelUpAuto ? `## 🚀 Tier Ascended: ${getLevelDisplay(targetLevel).toUpperCase()}\n\n` : "";
       const newNotes = prefix + data.notes;
       
       setContent(newNotes);
@@ -183,7 +208,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
             <div className="min-w-0">
               <h2 className="text-base md:text-xl font-black text-white truncate">{skill.name}</h2>
               <div className="flex items-center gap-1.5">
-                <span className="text-[8px] md:text-[10px] px-1.5 py-0.5 rounded font-black uppercase bg-blue-500/10 text-blue-400">{skill.level}</span>
+                <span className="text-[8px] md:text-[10px] px-1.5 py-0.5 rounded font-black uppercase bg-blue-500/10 text-blue-400">{getLevelDisplay(skill.level)}</span>
                 <span className="text-[8px] text-slate-600 font-black uppercase tracking-tighter hidden xs:block">{isSaving ? 'Syncing...' : 'Encrypted'}</span>
               </div>
             </div>
@@ -209,7 +234,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
           </div>
         </div>
 
-        {/* AI Command Bar - Enhanced with Generate Button */}
+        {/* AI Command Bar */}
         <div className="px-4 md:px-8 py-3 bg-slate-950/40 border-b border-slate-800/50">
           <form onSubmit={handleManualAiGenerate} className="flex flex-col md:flex-row gap-2 md:items-center">
             <div className="flex-1 flex items-center bg-slate-900/80 border border-slate-800 rounded-xl px-3 py-2 transition-all focus-within:border-blue-500/50">
@@ -218,7 +243,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
                 type="text" 
                 value={aiPrompt}
                 onChange={(e) => setAiPrompt(e.target.value)}
-                placeholder={isGenerating ? `Architecting ${skill.level} path...` : `Add specific goals for this ${skill.level} phase...`}
+                placeholder={isGenerating ? `Architecting ${getLevelDisplay(skill.level)} path...` : `Add specific goals for this ${skill.level} phase...`}
                 disabled={isGenerating}
                 className="w-full bg-transparent border-none text-slate-100 placeholder:text-slate-700 focus:ring-0 outline-none text-xs md:text-sm font-semibold"
               />
@@ -273,7 +298,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
               <div className="flex items-center justify-between gap-4">
                 <div className="min-w-0">
                   <h3 className="text-lg md:text-2xl font-black text-white leading-tight truncate">Tier Milestones</h3>
-                  <p className="text-[10px] md:text-sm text-slate-500 font-bold uppercase tracking-tighter">Current Level: {skill.level}</p>
+                  <p className="text-[10px] md:text-sm text-slate-500 font-bold uppercase tracking-tighter">Current Phase: {getLevelDisplay(skill.level)}</p>
                 </div>
                 <div className="shrink-0 text-right">
                   <div className={`text-2xl md:text-4xl font-black transition-all ${progressPercent === 100 ? 'text-emerald-400' : 'text-blue-500'}`}>{progressPercent}%</div>
@@ -300,7 +325,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
                 {checklist.length === 0 && !isGenerating && (
                   <div className="text-center py-20 border-2 border-dashed border-slate-800 rounded-3xl group cursor-pointer hover:border-slate-700 transition-colors" onClick={() => performAiGeneration(skill.level)}>
                     <div className="text-slate-700 uppercase font-black tracking-widest text-xs mb-2">Checklist Empty</div>
-                    <p className="text-[10px] font-bold text-slate-800 uppercase tracking-tighter">Click to Generate standard {skill.level} path</p>
+                    <p className="text-[10px] font-bold text-slate-800 uppercase tracking-tighter">Click to Generate {getLevelDisplay(skill.level)} path</p>
                   </div>
                 )}
               </div>
@@ -313,7 +338,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
               <div>
                 <div className="text-7xl md:text-8xl mb-6 animate-bounce">🌟</div>
                 <h3 className="text-3xl md:text-5xl font-black text-white mb-2 uppercase italic tracking-tighter">Level Ascended</h3>
-                <p className="text-blue-400 font-black uppercase tracking-widest text-xs md:text-sm animate-pulse mb-6">Now Entering the {skill.level} Phase</p>
+                <p className="text-blue-400 font-black uppercase tracking-widest text-xs md:text-sm animate-pulse mb-6">Now Entering: {getLevelDisplay(skill.level)}</p>
                 <div className="flex flex-col items-center gap-4">
                   <div className="flex items-center gap-2 text-slate-500 text-xs font-black uppercase tracking-[0.2em]">
                     <svg className="animate-spin w-4 h-4 text-purple-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>

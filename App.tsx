@@ -1,34 +1,61 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Skill, SkillLevel } from './types';
+import { Skill, SkillLevel, User } from './types';
 import { COLUMNS } from './constants';
 import Column from './components/Column';
 import NotebookModal from './components/NotebookModal';
+import AuthView from './components/AuthView';
+import { initDb, fetchUserSkills, upsertSkill, removeSkill } from './db';
 import { GoogleGenAI } from "@google/genai";
 
 const App: React.FC = () => {
-  const [skills, setSkills] = useState<Skill[]>(() => {
-    const saved = localStorage.getItem('skillquest-skills');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [user, setUser] = useState<User | null>(null);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [newSkillName, setNewSkillName] = useState('');
   const [draggedSkill, setDraggedSkill] = useState<Skill | null>(null);
   const [activeSkillId, setActiveSkillId] = useState<string | null>(null);
 
-  // Persistence
+  // Initialize DB and Check Session
   useEffect(() => {
-    localStorage.setItem('skillquest-skills', JSON.stringify(skills));
-  }, [skills]);
+    const bootstrap = async () => {
+      await initDb();
+      const savedUser = localStorage.getItem('skillquest-session');
+      if (savedUser) {
+        const u = JSON.parse(savedUser);
+        setUser(u);
+        const data = await fetchUserSkills(u.id);
+        setSkills(data);
+      }
+      setIsLoading(false);
+    };
+    bootstrap();
+  }, []);
+
+  const handleAuthenticated = async (u: User) => {
+    localStorage.setItem('skillquest-session', JSON.stringify(u));
+    setUser(u);
+    const data = await fetchUserSkills(u.id);
+    setSkills(data);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('skillquest-session');
+    setUser(null);
+    setSkills([]);
+  };
 
   const addSkill = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newSkillName.trim()) return;
+    if (!newSkillName.trim() || !user) return;
 
     const skillId = crypto.randomUUID();
     const name = newSkillName.trim();
 
     const newSkill: Skill = {
       id: skillId,
+      user_id: user.id,
       name,
       level: SkillLevel.DAILY,
       createdAt: Date.now(),
@@ -39,6 +66,9 @@ const App: React.FC = () => {
 
     setSkills(prev => [newSkill, ...prev]);
     setNewSkillName('');
+    setIsSyncing(true);
+    await upsertSkill(user.id, newSkill);
+    setIsSyncing(false);
 
     try {
       const apiKey = process.env.API_KEY || '';
@@ -49,21 +79,31 @@ const App: React.FC = () => {
         config: { temperature: 0.5 }
       });
       const icon = response.text?.trim().split(' ')[0] || '🎯';
-      setSkills(prev => prev.map(s => s.id === skillId ? { ...s, icon } : s));
+      const updatedSkill = { ...newSkill, icon };
+      setSkills(prev => prev.map(s => s.id === skillId ? updatedSkill : s));
+      await upsertSkill(user.id, updatedSkill);
     } catch (err) {
       console.warn("Failed to auto-assign icon:", err);
     }
   };
 
-  const deleteSkill = useCallback((id: string) => {
+  const deleteSkill = useCallback(async (id: string) => {
     setSkills(prev => prev.filter(s => s.id !== id));
+    await removeSkill(id);
   }, []);
 
-  const updateSkill = useCallback((id: string, updates: Partial<Skill>) => {
-    setSkills(prev => prev.map(s => 
-      s.id === id ? { ...s, ...updates } : s
-    ));
-  }, []);
+  const updateSkill = useCallback(async (id: string, updates: Partial<Skill>) => {
+    if (!user) return;
+    setSkills(prev => {
+      const updated = prev.map(s => s.id === id ? { ...s, ...updates } : s);
+      const target = updated.find(s => s.id === id);
+      if (target) {
+        setIsSyncing(true);
+        upsertSkill(user.id, target).finally(() => setIsSyncing(false));
+      }
+      return updated;
+    });
+  }, [user]);
 
   const handleDragStart = (e: React.DragEvent, skill: Skill) => {
     setDraggedSkill(skill);
@@ -71,15 +111,18 @@ const App: React.FC = () => {
     e.dataTransfer.effectAllowed = 'move';
   };
 
-  const handleDrop = (e: React.DragEvent, level: SkillLevel) => {
+  const handleDrop = async (e: React.DragEvent, level: SkillLevel) => {
     e.preventDefault();
-    if (!draggedSkill) return;
+    if (!draggedSkill || !user) return;
 
-    setSkills(prev => prev.map(s => 
-      s.id === draggedSkill.id ? { ...s, level } : s
-    ));
+    const updatedSkill = { ...draggedSkill, level };
+    setSkills(prev => prev.map(s => s.id === draggedSkill.id ? updatedSkill : s));
+    await upsertSkill(user.id, updatedSkill);
     setDraggedSkill(null);
   };
+
+  if (isLoading) return null;
+  if (!user) return <AuthView onAuthenticated={handleAuthenticated} />;
 
   const activeSkill = skills.find(s => s.id === activeSkillId);
 
@@ -95,12 +138,27 @@ const App: React.FC = () => {
             <h1 className="text-lg md:text-xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
               SkillQuest
             </h1>
-            <p className="text-[8px] md:text-[10px] uppercase tracking-[0.2em] font-black text-slate-500 hidden xs:block">Mastery Board</p>
+            <div className="flex items-center gap-2">
+              <p className="text-[8px] uppercase tracking-[0.2em] font-black text-slate-500 hidden xs:block">{user.email}</p>
+              {isSyncing && (
+                <div className="flex gap-0.5 items-center">
+                   <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce"></div>
+                   <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce [animation-delay:0.2s]"></div>
+                   <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce [animation-delay:0.4s]"></div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
         
         <div className="flex items-center gap-3 md:gap-6">
-          <div className="flex gap-2 md:gap-4 items-center">
+          <button 
+            onClick={handleLogout}
+            className="text-[10px] font-black uppercase text-slate-600 hover:text-red-400 transition-colors tracking-widest border border-slate-800 px-3 py-1.5 rounded-lg"
+          >
+            Logout
+          </button>
+          <div className="hidden sm:flex gap-2 md:gap-4 items-center">
              <div className="flex flex-col items-end">
                <span className="text-[10px] text-slate-600 font-black uppercase">Active</span>
                <span className="text-xs md:text-sm font-black text-slate-200">{skills.length}</span>
@@ -156,7 +214,7 @@ const App: React.FC = () => {
                   type="text" 
                   value={newSkillName}
                   onChange={(e) => setNewSkillName(e.target.value)}
-                  placeholder="Skill name..."
+                  placeholder="New Skill Protocol..."
                   className="w-full bg-transparent border-none text-slate-100 placeholder:text-slate-700 focus:ring-0 outline-none text-sm py-2.5 md:py-3 font-semibold"
                 />
               </div>
