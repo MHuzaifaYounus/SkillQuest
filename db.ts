@@ -18,8 +18,7 @@ export const initDb = async () => {
       );
     `;
 
-    // 2. Perform manual migrations for existing tables that might be missing new columns
-    // Postgres 9.6+ supports ADD COLUMN IF NOT EXISTS
+    // 2. Perform manual migrations for existing tables
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name TEXT;`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT FALSE;`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_code TEXT;`;
@@ -34,9 +33,17 @@ export const initDb = async () => {
         icon TEXT,
         notes TEXT,
         checklist JSONB,
-        created_at BIGINT
+        created_at BIGINT,
+        mentor_context TEXT,
+        mentor_avatar TEXT,
+        chat_history JSONB
       );
     `;
+
+    // Migration for existing columns
+    await sql`ALTER TABLE skills ADD COLUMN IF NOT EXISTS mentor_context TEXT;`;
+    await sql`ALTER TABLE skills ADD COLUMN IF NOT EXISTS mentor_avatar TEXT;`;
+    await sql`ALTER TABLE skills ADD COLUMN IF NOT EXISTS chat_history JSONB;`;
     
     console.log('Database initialized and migrated successfully');
   } catch (err) {
@@ -110,19 +117,25 @@ export const fetchUserSkills = async (userId: string): Promise<Skill[]> => {
     icon: row.icon,
     notes: row.notes,
     checklist: row.checklist,
-    createdAt: Number(row.created_at)
+    createdAt: Number(row.created_at),
+    mentor_context: row.mentor_context,
+    mentor_avatar: row.mentor_avatar,
+    chat_history: row.chat_history
   })) as Skill[];
 };
 
 export const upsertSkill = async (userId: string, skill: Skill) => {
   await sql`
-    INSERT INTO skills (id, user_id, name, level, icon, notes, checklist, created_at)
-    VALUES (${skill.id}, ${userId}, ${skill.name}, ${skill.level}, ${skill.icon}, ${skill.notes}, ${JSON.stringify(skill.checklist)}, ${skill.createdAt})
+    INSERT INTO skills (id, user_id, name, level, icon, notes, checklist, created_at, mentor_context, mentor_avatar, chat_history)
+    VALUES (${skill.id}, ${userId}, ${skill.name}, ${skill.level}, ${skill.icon}, ${skill.notes}, ${JSON.stringify(skill.checklist)}, ${skill.createdAt}, ${skill.mentor_context || null}, ${skill.mentor_avatar || null}, ${JSON.stringify(skill.chat_history) || null})
     ON CONFLICT (id) DO UPDATE SET
       level = EXCLUDED.level,
       icon = EXCLUDED.icon,
       notes = EXCLUDED.notes,
-      checklist = EXCLUDED.checklist;
+      checklist = EXCLUDED.checklist,
+      mentor_context = EXCLUDED.mentor_context,
+      mentor_avatar = EXCLUDED.mentor_avatar,
+      chat_history = EXCLUDED.chat_history;
   `;
 };
 

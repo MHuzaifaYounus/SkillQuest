@@ -1,5 +1,7 @@
 {
   "name": "SkillQuest Mastery Board",
   "description": "A high-performance skill management application with a dark aesthetic, featuring four tiered levels (Daily, Weekly, Monthly, Passive) with seamless drag-and-drop functionality to track your learning journey.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "microphone"
+  ]
 }

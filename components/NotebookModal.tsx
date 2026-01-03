@@ -1,9 +1,18 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Skill, ChecklistItem, SkillLevel } from '../types';
-import { GoogleGenAI, Type } from "@google/genai";
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { GoogleGenAI, Type, Modality } from "@google/genai";
+
+interface MCQ {
+  question: string;
+  options: { text: string; id: string; feedback: string }[];
+}
+
+interface Message {
+  role: 'user' | 'model';
+  text: string;
+  mcq?: MCQ;
+}
 
 interface NotebookModalProps {
   skill: Skill;
@@ -11,175 +20,377 @@ interface NotebookModalProps {
   onUpdate: (id: string, updates: Partial<Skill>) => void;
 }
 
-const getNextLevel = (current: SkillLevel): SkillLevel | null => {
-  switch (current) {
-    case SkillLevel.DAILY: return SkillLevel.WEEKLY;
-    case SkillLevel.WEEKLY: return SkillLevel.MONTHLY;
-    case SkillLevel.MONTHLY: return SkillLevel.PASSIVE;
-    default: return null;
+// --- Audio Utilities ---
+function encode(bytes: Uint8Array) {
+  let binary = '';
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
   }
-};
+  return btoa(binary);
+}
+
+function decode(base64: string) {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function decodeAudioData(
+  data: Uint8Array,
+  ctx: AudioContext,
+  sampleRate: number,
+  numChannels: number,
+): Promise<AudioBuffer> {
+  const dataInt16 = new Int16Array(data.buffer);
+  const frameCount = dataInt16.length / numChannels;
+  const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
+
+  for (let channel = 0; channel < numChannels; channel++) {
+    const channelData = buffer.getChannelData(channel);
+    for (let i = 0; i < frameCount; i++) {
+      channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
+    }
+  }
+  return buffer;
+}
+
+function createBlob(data: Float32Array): { data: string; mimeType: string } {
+  const l = data.length;
+  const int16 = new Int16Array(l);
+  for (let i = 0; i < l; i++) {
+    int16[i] = data[i] * 32768;
+  }
+  return {
+    data: encode(new Uint8Array(int16.buffer)),
+    mimeType: 'audio/pcm;rate=16000',
+  };
+}
 
 const getLevelDisplay = (level: SkillLevel) => {
   switch (level) {
-    case SkillLevel.DAILY: return "Beginner - Daily";
-    case SkillLevel.WEEKLY: return "Intermediate - Weekly";
-    case SkillLevel.MONTHLY: return "Advanced - Monthly";
-    case SkillLevel.PASSIVE: return "Master - Passive";
+    case SkillLevel.DAILY: return "Daily (Beginner)";
+    case SkillLevel.WEEKLY: return "Weekly (Intermediate)";
+    case SkillLevel.MONTHLY: return "Monthly (Advanced)";
+    case SkillLevel.PASSIVE: return "Passive (Master)";
     default: return level;
   }
 };
 
+const cleanJsonResponse = (text: string) => {
+  if (!text) return '{}';
+  let cleaned = text.replace(/```json/g, '').replace(/```/g, '');
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start !== -1 && end !== -1) {
+    return cleaned.substring(start, end + 1);
+  }
+  return cleaned.trim();
+};
+
 const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate }) => {
-  const [content, setContent] = useState(skill.notes || '');
-  const [checklist, setChecklist] = useState<ChecklistItem[]>(skill.checklist || []);
-  const [aiPrompt, setAiPrompt] = useState('');
+  const [checklist, setChecklist] = useState<ChecklistItem[]>(Array.isArray(skill.checklist) ? skill.checklist : []);
   const [isSaving, setIsSaving] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [showLevelUp, setShowLevelUp] = useState(false);
-  const [viewMode, setViewMode] = useState<'edit' | 'preview' | 'checklist'>(content ? 'preview' : 'checklist');
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [viewMode, setViewMode] = useState<'checklist' | 'chat'>('checklist');
+  const [messages, setMessages] = useState<Message[]>(Array.isArray(skill.chat_history) ? skill.chat_history : []);
+  const [chatInput, setChatInput] = useState('');
+  const [isChatting, setIsChatting] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // Voice Session State
+  const [isVoiceActive, setIsVoiceActive] = useState(false);
+  const voiceSessionRef = useRef<any>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const outputAudioContextRef = useRef<AudioContext | null>(null);
+  const nextStartTimeRef = useRef<number>(0);
+  const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+
+  const [mentorAvatar, setMentorAvatar] = useState(skill.mentor_avatar || '');
+  const [isGeneratingAvatar, setIsGeneratingAvatar] = useState(false);
+
+  // Sync Checklist
   useEffect(() => {
     const timer = setTimeout(() => {
-      const notesChanged = content !== skill.notes;
       const checklistChanged = JSON.stringify(checklist) !== JSON.stringify(skill.checklist);
-      if (notesChanged || checklistChanged) {
+      if (checklistChanged) {
         setIsSaving(true);
-        onUpdate(skill.id, { notes: content, checklist: checklist });
+        onUpdate(skill.id, { checklist: checklist });
         setTimeout(() => setIsSaving(false), 800);
       }
     }, 1000);
     return () => clearTimeout(timer);
-  }, [content, checklist, skill.id, skill.notes, skill.checklist, onUpdate]);
+  }, [checklist, skill.id, skill.checklist, onUpdate]);
 
-  const toggleChecklistItem = (id: string) => {
-    const updatedChecklist = checklist.map(item => 
-      item.id === id ? { ...item, completed: !item.completed } : item
-    );
-    setChecklist(updatedChecklist);
-    
-    if (updatedChecklist.length > 0 && updatedChecklist.every(i => i.completed)) {
-      const nextLevel = getNextLevel(skill.level);
-      if (nextLevel) {
-        handleLevelUp(nextLevel);
+  // Sync Chat History
+  useEffect(() => {
+    const chatChanged = JSON.stringify(messages) !== JSON.stringify(skill.chat_history);
+    if (chatChanged && messages.length > 0) {
+      onUpdate(skill.id, { chat_history: messages });
+    }
+  }, [messages, skill.id, skill.chat_history, onUpdate]);
+
+  // Generate Avatar
+  useEffect(() => {
+    if (!mentorAvatar && !isGeneratingAvatar) {
+      (async () => {
+        setIsGeneratingAvatar(true);
+        try {
+          const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+          const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: { parts: [{ text: `A close-up high-quality portrait of a wise grandmaster mentor in ${skill.name}. Cinematic lighting, professional studio photo.` }] },
+            config: { imageConfig: { aspectRatio: "1:1" } }
+          });
+          const part = response.candidates?.[0]?.content?.parts.find(p => p.inlineData);
+          if (part?.inlineData) {
+            const base64 = `data:image/png;base64,${part.inlineData.data}`;
+            setMentorAvatar(base64);
+            onUpdate(skill.id, { mentor_avatar: base64 });
+          }
+        } catch (e) { console.error(e); } finally { setIsGeneratingAvatar(false); }
+      })();
+    }
+  }, [skill.name, mentorAvatar, isGeneratingAvatar, skill.id, onUpdate]);
+
+  // Auto-switch to chat if no checklist exists (Diagnostic mode)
+  useEffect(() => {
+    if (checklist.length === 0 && viewMode === 'checklist') {
+      setViewMode('chat');
+    }
+  }, [checklist.length, viewMode]);
+
+  // Sequential Diagnostic Effect
+  useEffect(() => {
+    if (viewMode === 'chat' && messages.length === 0 && checklist.length === 0 && !isChatting) {
+      (async () => {
+        setIsChatting(true);
+        try {
+          const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+          const response = await ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: `Initial diagnostic for ${skill.name}. Tier: ${getLevelDisplay(skill.level)}. 
+            Step: First greeting. Identify the skill and ask the FIRST assessment question one-by-one.`,
+            config: {
+              systemInstruction: `You are the Grandmaster Mentor. Before creating a roadmap, you MUST assess the student.
+              1. Start by saying: "I am your mentor for ${skill.name}. To build your roadmap for the ${getLevelDisplay(skill.level)} tier, I must first identify your current level."
+              2. Ask exactly 4 questions, one-by-one, about their experience.
+              3. For each question, provide 3-4 clear MCQ options.
+              Return JSON: { "text": "Greeting text", "question": "Question 1", "options": [...] }`,
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  text: { type: Type.STRING },
+                  question: { type: Type.STRING },
+                  options: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        id: { type: Type.STRING },
+                        text: { type: Type.STRING },
+                        feedback: { type: Type.STRING }
+                      },
+                      required: ["id", "text", "feedback"]
+                    }
+                  }
+                },
+                required: ["text", "question", "options"]
+              }
+            }
+          });
+          const data = JSON.parse(cleanJsonResponse(response.text || '{}'));
+          setMessages([{ role: 'model', text: `${data.text}\n\n${data.question}`, mcq: data as MCQ }]);
+        } catch (e) {
+          console.error(e);
+          setMessages([{ role: 'model', text: `Welcome. I am your mentor for ${skill.name}. What is your experience level?` }]);
+        } finally { setIsChatting(false); }
+      })();
+    }
+  }, [viewMode, messages.length, checklist.length, isChatting, skill.name, skill.level]);
+
+  const handleSendMessage = async (input: string, optionFeedback?: string) => {
+    if (!input.trim() || isChatting) return;
+    const userMessage = input.trim();
+    const updatedMessages: Message[] = [...messages, { role: 'user', text: userMessage }];
+    setMessages(updatedMessages);
+    setChatInput('');
+    setIsChatting(true);
+
+    const userCount = updatedMessages.filter(m => m.role === 'user').length;
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+      
+      // If we are still in the 4-question diagnostic phase
+      if (checklist.length === 0 && userCount < 4) {
+        const response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: `Skill: ${skill.name}. Answers so far: ${JSON.stringify(updatedMessages.filter(m => m.role === 'user').map(m => m.text))}. 
+          Next step: Question ${userCount + 1}.`,
+          config: {
+            systemInstruction: `Continue the diagnostic. Ask exactly 4 questions. You are on question ${userCount + 1}. 
+            Return JSON with { "question": "...", "options": [...] }.`,
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                question: { type: Type.STRING },
+                options: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: { id: { type: Type.STRING }, text: { type: Type.STRING }, feedback: { type: Type.STRING } }
+                  }
+                }
+              },
+              required: ["question", "options"]
+            }
+          }
+        });
+        const data = JSON.parse(cleanJsonResponse(response.text || '{}'));
+        setMessages([...updatedMessages, { role: 'model', text: data.question, mcq: data as MCQ }]);
+      } 
+      // If 4 questions are done, analyze and generate roadmap
+      else if (checklist.length === 0 && userCount >= 4) {
+        setIsGenerating(true);
+        const analysisResponse = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: `The student has completed the assessment for ${skill.name}. 
+          Assessment data: ${JSON.stringify(updatedMessages.filter(m => m.role === 'user').map(m => m.text))}.
+          Current Box Level: ${getLevelDisplay(skill.level)}.
+          Generate a tailored checklist of 5-7 milestones.`,
+          config: {
+            systemInstruction: `Create a mastery roadmap. 
+            The milestones must reflect the student's current skill (beginner/expert) AND the box frequency (Daily = small active steps, Weekly = recurring focus, Monthly = high-level review, Passive = maintenance).
+            Return JSON: { "mentor_summary": "A brief analysis of their level", "icon": "emoji", "checklist": [{ "title": "...", "description": "..." }] }`,
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                mentor_summary: { type: Type.STRING },
+                icon: { type: Type.STRING },
+                checklist: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: { title: { type: Type.STRING }, description: { type: Type.STRING } }
+                  }
+                }
+              },
+              required: ["mentor_summary", "icon", "checklist"]
+            }
+          }
+        });
+        const result = JSON.parse(cleanJsonResponse(analysisResponse.text || '{}'));
+        const newItems: ChecklistItem[] = result.checklist.map((i: any) => ({
+          id: crypto.randomUUID(),
+          text: i.title,
+          description: i.description,
+          completed: false
+        }));
+        setChecklist(newItems);
+        setMessages([...updatedMessages, { role: 'model', text: `${result.mentor_summary}\n\nI have created your roadmap. Switch to the Checklist tab to begin.` }]);
+        onUpdate(skill.id, { icon: result.icon || '🎯', checklist: newItems, mentor_context: result.mentor_summary });
+        setIsGenerating(false);
+      } 
+      // Normal chat mode
+      else {
+        const response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: `Chat about ${skill.name}. User: "${userMessage}". Tier: ${getLevelDisplay(skill.level)}. Context: ${skill.mentor_context}.`,
+          config: {
+            systemInstruction: "You are the Grandmaster Mentor. Give encouraging and precise advice.",
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: { text: { type: Type.STRING } },
+              required: ["text"]
+            }
+          }
+        });
+        const data = JSON.parse(cleanJsonResponse(response.text || '{}'));
+        setMessages([...updatedMessages, { role: 'model', text: data.text || "Continue your path." }]);
       }
+    } catch (e) {
+      console.error(e);
+      setMessages([...updatedMessages, { role: 'model', text: "The connection to the mastery nexus is unstable." }]);
+    } finally {
+      setIsChatting(false);
     }
   };
 
-  const handleLevelUp = async (nextLevel: SkillLevel) => {
-    setShowLevelUp(true);
-    onUpdate(skill.id, { level: nextLevel });
-    await performAiGeneration(nextLevel, true);
-    setTimeout(() => setShowLevelUp(false), 3000);
-  };
-
-  const performAiGeneration = async (targetLevel: SkillLevel, isLevelUpAuto: boolean = false) => {
-    if (isGenerating) return;
-    setIsGenerating(true);
+  const startVoiceSession = async () => {
+    if (isVoiceActive) return;
+    setIsVoiceActive(true);
     try {
-      const apiKey = process.env.API_KEY || '';
-      const ai = new GoogleGenAI({ apiKey });
-      
-      let levelSpecificInstructions = "";
-      let checklistConstraint = "";
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+      const inputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      const outputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      if (inputCtx.state === 'suspended') await inputCtx.resume();
+      if (outputCtx.state === 'suspended') await outputCtx.resume();
+      audioContextRef.current = inputCtx;
+      outputAudioContextRef.current = outputCtx;
 
-      switch(targetLevel) {
-        case SkillLevel.DAILY:
-          levelSpecificInstructions = "Design a 7-DAY BEGINNER'S KICKSTART. Focus on foundational habit formation and simple daily drills to build neural pathways.";
-          checklistConstraint = "The checklist MUST contain EXACTLY 7 items. Format titles exactly as: 'Day 1: [Task]', 'Day 2: [Task]', up to 'Day 7: [Task]'. Tasks must be simple, actionable daily exercises.";
-          break;
-        case SkillLevel.WEEKLY:
-          levelSpecificInstructions = "Design a 4-WEEK INTERMEDIATE SPRINT. Focus on project-based learning and applying fundamentals to complex scenarios.";
-          checklistConstraint = "The checklist MUST contain EXACTLY 4 items. Format titles exactly as: 'Week 1: [Objective]', 'Week 2: [Objective]', up to 'Week 4: [Objective]'. Tasks must be significant weekly milestones.";
-          break;
-        case SkillLevel.MONTHLY:
-          levelSpecificInstructions = "Design an ADVANCED MASTERY ROADMAP. Focus on architectural understanding, optimization, and advanced theoretical deep-dives.";
-          checklistConstraint = "The checklist should feature 3-5 high-level 'Mastery Audits' or deep-dive research projects that represent significant progress.";
-          break;
-        case SkillLevel.PASSIVE:
-          levelSpecificInstructions = "Design a MASTER'S RETENTION STRATEGY. Focus on 'Keep-Alive' triggers and subconscious recall to prevent skill decay with minimal active effort.";
-          checklistConstraint = "The checklist should consist of 3-5 'Maintenance Triggers' (e.g., 'Bi-Monthly Refresh', 'Subconscious Audit'). These are long-term recurring tasks.";
-          break;
-      }
-
-      const userContext = aiPrompt.trim() ? `Incorporate these user goals: "${aiPrompt}".` : "Follow standard professional growth protocols.";
-      const prompt = `Skill: ${skill.name}. Current Tier: ${getLevelDisplay(targetLevel)}.
-      
-      INSTRUCTIONS:
-      ${levelSpecificInstructions}
-      
-      FORMATTING RULES:
-      ${checklistConstraint}
-      
-      CONTEXT:
-      ${userContext}`;
-      
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-preview',
-        contents: prompt,
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const sessionPromise = ai.live.connect({
+        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+        callbacks: {
+          onopen: () => {
+            const source = inputCtx.createMediaStreamSource(stream);
+            const scriptProcessor = inputCtx.createScriptProcessor(4096, 1, 1);
+            scriptProcessor.onaudioprocess = (e) => {
+              const pcmBlob = createBlob(e.inputBuffer.getChannelData(0));
+              sessionPromise.then(s => s.sendRealtimeInput({ media: pcmBlob }));
+            };
+            source.connect(scriptProcessor);
+            scriptProcessor.connect(inputCtx.destination);
+          },
+          onmessage: async (m) => {
+            const data = m.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
+            if (data) {
+              nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputCtx.currentTime);
+              const buffer = await decodeAudioData(decode(data), outputCtx, 24000, 1);
+              const source = outputCtx.createBufferSource();
+              source.buffer = buffer;
+              source.connect(outputCtx.destination);
+              source.start(nextStartTimeRef.current);
+              nextStartTimeRef.current += buffer.duration;
+              activeSourcesRef.current.add(source);
+            }
+          },
+          onclose: () => stopVoiceSession(),
+          onerror: () => stopVoiceSession(),
+        },
         config: {
-          systemInstruction: `You are a high-level skill acquisition architect. 
-          Return ONLY valid JSON. 
-          The 'notes' field should be a professional markdown guide. 
-          The 'checklist' field must follow the EXACT titling rules provided (Day 1, Week 1, etc. where applicable).`,
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              notes: { type: Type.STRING },
-              icon: { type: Type.STRING },
-              checklist: { 
-                type: Type.ARRAY, 
-                items: { 
-                  type: Type.OBJECT, 
-                  properties: { 
-                    title: { type: Type.STRING }, 
-                    description: { type: Type.STRING } 
-                  }, 
-                  required: ["title", "description"] 
-                } 
-              }
-            },
-            required: ["notes", "icon", "checklist"]
-          }
+          responseModalities: [Modality.AUDIO],
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
+          systemInstruction: `Socratic mentor for ${skill.name}. Keep responses short and encouraging.`,
         }
       });
-      
-      const responseText = response.text;
-      if (!responseText) throw new Error("Empty AI response");
-
-      const data = JSON.parse(responseText);
-      const newItems: ChecklistItem[] = data.checklist.map((item: any) => ({ 
-        id: crypto.randomUUID(), 
-        text: item.title, 
-        description: item.description, 
-        completed: false 
-      }));
-      
-      const prefix = isLevelUpAuto ? `## 🚀 Tier Ascended: ${getLevelDisplay(targetLevel).toUpperCase()}\n\n` : "";
-      const newNotes = prefix + data.notes;
-      
-      setContent(newNotes);
-      setChecklist(newItems);
-      onUpdate(skill.id, { 
-        notes: newNotes, 
-        icon: data.icon, 
-        checklist: newItems,
-        level: targetLevel 
-      });
-      setAiPrompt('');
-      setViewMode('checklist');
-    } catch (error) { 
-      console.error("AI Generation Error:", error); 
-    } finally { 
-      setIsGenerating(false); 
+      voiceSessionRef.current = sessionPromise;
+    } catch (e) {
+      console.error(e);
+      setIsVoiceActive(false);
     }
   };
 
-  const handleManualAiGenerate = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    performAiGeneration(skill.level);
+  const stopVoiceSession = useCallback(() => {
+    if (audioContextRef.current) audioContextRef.current.close().catch(() => {});
+    if (outputAudioContextRef.current) outputAudioContextRef.current.close().catch(() => {});
+    activeSourcesRef.current.forEach(s => { try { s.stop(); } catch(e) {} });
+    activeSourcesRef.current.clear();
+    setIsVoiceActive(false);
+  }, []);
+
+  const toggleChecklistItem = (id: string) => {
+    setChecklist(prev => prev.map(item => item.id === id ? { ...item, completed: !item.completed } : item));
   };
 
   const progressPercent = checklist.length > 0 ? Math.round((checklist.filter(i => i.completed).length / checklist.length) * 100) : 0;
@@ -187,165 +398,109 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
   return (
     <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center p-0 md:p-8 animate-in fade-in duration-300">
       <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md" onClick={onClose}></div>
-      
-      <div className="relative w-full md:max-w-4xl bg-slate-900 border-t md:border border-slate-800 rounded-t-3xl md:rounded-3xl shadow-2xl flex flex-col h-[95vh] md:h-[85vh] overflow-hidden animate-in slide-in-from-bottom-full md:slide-in-from-bottom-8 duration-500">
+      <div className="relative w-full md:max-w-4xl bg-slate-900 border-t md:border border-slate-800 rounded-t-3xl md:rounded-3xl shadow-2xl flex flex-col h-[95vh] md:h-[85vh] overflow-hidden">
         
         {/* Header */}
-        <div className="px-4 md:px-8 py-3 md:py-5 border-b border-slate-800 flex items-center justify-between bg-slate-900/50 sticky top-0 z-10">
-          <div className="flex items-center gap-3 md:gap-4 overflow-hidden">
-            <div className={`p-2 md:p-2.5 rounded-xl md:rounded-2xl text-xl md:text-2xl flex items-center justify-center shrink-0 w-10 h-10 md:w-12 md:h-12 transition-all ${showLevelUp ? 'bg-amber-400 text-slate-900 shadow-xl' : 'bg-blue-500/10 text-blue-400'}`}>
+        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-2xl bg-blue-500/10 transition-transform ${isGenerating ? 'animate-spin' : ''}`}>
               {skill.icon || '🎯'}
             </div>
-            <div className="min-w-0">
-              <h2 className="text-base md:text-xl font-black text-white truncate">{skill.name}</h2>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[8px] md:text-[10px] px-1.5 py-0.5 rounded font-black uppercase bg-blue-500/10 text-blue-400">{getLevelDisplay(skill.level)}</span>
-              </div>
+            <div>
+              <h2 className="text-lg font-black text-white">{skill.name}</h2>
+              <span className="text-[10px] uppercase tracking-widest font-black text-blue-400">{getLevelDisplay(skill.level)}</span>
             </div>
           </div>
-          
-          <button onClick={onClose} className="p-2 hover:bg-slate-800 rounded-xl text-slate-500 hover:text-white transition-colors shrink-0">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          <button onClick={onClose} className="p-2 hover:bg-slate-800 rounded-xl text-slate-500">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
 
         {/* Tabs */}
-        <div className="px-4 md:px-8 py-2 bg-slate-950/20 border-b border-slate-800 overflow-x-auto">
-          <div className="flex bg-slate-950/50 p-1 rounded-xl border border-slate-800/50 min-w-max">
-            {['edit', 'preview', 'checklist'].map((mode) => (
-              <button 
-                key={mode}
-                onClick={() => setViewMode(mode as any)}
-                className={`flex-1 px-4 md:px-6 py-2 rounded-lg text-[10px] md:text-xs font-black uppercase tracking-widest transition-all ${viewMode === mode ? 'bg-slate-800 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
-              >
-                {mode === 'preview' ? 'Roadmap' : mode}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* AI Command Bar */}
-        <div className="px-4 md:px-8 py-3 bg-slate-950/40 border-b border-slate-800/50">
-          <form onSubmit={handleManualAiGenerate} className="flex flex-col md:flex-row gap-2 md:items-center">
-            <div className="flex-1 flex items-center bg-slate-900/80 border border-slate-800 rounded-xl px-3 py-2 transition-all focus-within:border-blue-500/50">
-              <svg className={`mr-2 md:mr-3 shrink-0 ${isGenerating ? 'animate-spin text-purple-400' : 'text-blue-400'}`} xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
-              <input 
-                type="text" 
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                placeholder={isGenerating ? `Architecting ${getLevelDisplay(skill.level)}...` : `Customize this ${skill.level} plan...`}
-                disabled={isGenerating}
-                className="w-full bg-transparent border-none text-slate-100 placeholder:text-slate-700 focus:ring-0 outline-none text-xs md:text-sm font-semibold"
-              />
-            </div>
-            <button 
-              type="submit" 
-              disabled={isGenerating} 
-              className={`px-6 py-2.5 rounded-xl font-black uppercase tracking-wider text-[10px] md:text-xs transition-all shadow-lg flex items-center justify-center gap-2 whitespace-nowrap
-                ${isGenerating ? 'bg-slate-800 text-slate-500 cursor-wait' : 'bg-blue-600 hover:bg-blue-500 text-white active:scale-95'}`}
-            >
-              {isGenerating ? (
-                <>
-                  <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                  Architecting...
-                </>
-              ) : (
-                <>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v18"/><path d="m19 14-7 7-7-7"/></svg>
-                  Generate Plan
-                </>
-              )}
+        <div className="flex bg-slate-950/30 p-2 gap-2 border-b border-slate-800">
+          <button 
+            disabled={checklist.length === 0}
+            onClick={() => setViewMode('checklist')} 
+            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${checklist.length === 0 ? 'opacity-20 cursor-not-allowed' : ''} ${viewMode === 'checklist' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
+          >
+            Checklist
+          </button>
+          <button onClick={() => setViewMode('chat')} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${viewMode === 'chat' ? 'bg-purple-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}>
+            Mentor Chat {checklist.length === 0 && ' (Diagnostic)'}
+          </button>
+          {viewMode === 'chat' && (
+            <button onClick={isVoiceActive ? stopVoiceSession : startVoiceSession} className={`ml-auto px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${isVoiceActive ? 'bg-red-500 text-white animate-pulse' : 'bg-slate-800 text-slate-400 hover:text-white'}`}>
+              {isVoiceActive ? 'Voice Active' : 'Voice Link'}
             </button>
-          </form>
+          )}
         </div>
 
-        {/* Main Content Area */}
-        <div className={`flex-1 overflow-y-auto custom-scrollbar relative p-4 md:p-8 transition-opacity duration-500 ${isGenerating ? 'opacity-30' : 'opacity-100'}`}>
-          {viewMode === 'edit' && (
-            <textarea
-              ref={textareaRef}
-              autoFocus
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              className="w-full h-full bg-transparent border-none focus:ring-0 outline-none text-slate-200 text-base md:text-lg leading-relaxed resize-none font-medium p-0"
-              placeholder="Manual entry..."
-            />
-          )}
-
-          {viewMode === 'preview' && (
-            <div className="prose-custom max-w-none">
-              {content ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown> : (
-                <div className="flex flex-col items-center justify-center py-20 text-slate-700">
-                   <p className="uppercase font-black tracking-[0.2em] text-[10px]">No Strategy Drafted</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {viewMode === 'checklist' && (
-            <div className="space-y-4 md:space-y-6 pb-20">
-              <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <h3 className="text-lg md:text-2xl font-black text-white leading-tight truncate">Tier Milestones</h3>
-                  <p className="text-[10px] md:text-sm text-slate-500 font-bold uppercase tracking-tighter">{getLevelDisplay(skill.level)} Phase</p>
-                </div>
-                <div className="shrink-0 text-right">
-                  <div className={`text-2xl md:text-4xl font-black transition-all ${progressPercent === 100 ? 'text-emerald-400' : 'text-blue-500'}`}>{progressPercent}%</div>
-                  <div className="text-[8px] md:text-[10px] font-black uppercase tracking-widest text-slate-700">Completion</div>
-                </div>
+        {/* Content */}
+        <div className={`flex-1 overflow-y-auto p-6 custom-scrollbar relative ${isGenerating ? 'opacity-40 pointer-events-none' : ''}`}>
+          {viewMode === 'checklist' ? (
+            <div className="space-y-4">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-2xl font-black italic uppercase">Milestones</h3>
+                <span className="text-3xl font-black text-blue-500">{progressPercent}%</span>
               </div>
-
-              <div className="space-y-3">
-                {checklist.map((item) => (
-                  <div 
-                    key={item.id}
-                    onClick={() => !isGenerating && toggleChecklistItem(item.id)}
-                    className={`flex items-start gap-3 md:gap-4 p-4 md:p-5 rounded-xl md:rounded-2xl border transition-all cursor-pointer ${item.completed ? 'bg-emerald-500/5 border-emerald-500/10 opacity-60' : 'bg-slate-800/40 border-slate-800 hover:bg-slate-800/60'} ${isGenerating ? 'cursor-wait pointer-events-none' : ''}`}
-                  >
-                    <div className={`mt-0.5 w-5 h-5 md:w-6 md:h-6 rounded-lg border-2 flex items-center justify-center shrink-0 transition-all ${item.completed ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-slate-700'}`}>
-                      {item.completed && <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>}
+              {checklist.map(item => (
+                <div key={item.id} onClick={() => toggleChecklistItem(item.id)} className={`p-4 rounded-2xl border transition-all cursor-pointer flex gap-4 ${item.completed ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-800/40 border-slate-800 hover:border-slate-700'}`}>
+                  <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center shrink-0 ${item.completed ? 'bg-emerald-500 border-emerald-500' : 'border-slate-700'}`}>
+                    {item.completed && <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>}
+                  </div>
+                  <div>
+                    <h4 className={`text-sm font-bold ${item.completed ? 'text-slate-500 line-through' : 'text-white'}`}>{item.text}</h4>
+                    <p className="text-xs text-slate-500 mt-1">{item.description}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="h-full flex flex-col">
+              <div className="flex-1 space-y-6 pb-20">
+                <div className="flex justify-center mb-8">
+                  {mentorAvatar && <img src={mentorAvatar} alt="Master" className="w-24 h-24 rounded-full border-2 border-purple-500/50 object-cover shadow-2xl" />}
+                </div>
+                {messages.map((m, i) => (
+                  <div key={i} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'} animate-in fade-in slide-in-from-bottom-2`}>
+                    <div className={`max-w-[85%] p-4 rounded-2xl ${m.role === 'user' ? 'bg-purple-600 text-white rounded-tr-none' : 'bg-slate-800 text-slate-100 rounded-tl-none border border-slate-700 shadow-xl'}`}>
+                      <p className="text-sm font-medium whitespace-pre-wrap">{m.text}</p>
                     </div>
-                    <div className="min-w-0">
-                      <h4 className={`text-xs md:text-sm font-black tracking-tight mb-0.5 ${item.completed ? 'text-slate-600 line-through' : 'text-slate-100'}`}>{item.text}</h4>
-                      {item.description && <p className={`text-[10px] md:text-xs leading-relaxed ${item.completed ? 'text-slate-700' : 'text-slate-400'}`}>{item.description}</p>}
-                    </div>
+                    {m.mcq && i === messages.length - 1 && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4 w-full">
+                        {m.mcq.options.map(o => (
+                          <button key={o.id} onClick={() => handleSendMessage(o.text, o.feedback)} className="p-4 bg-slate-800 border border-slate-700 rounded-2xl text-xs font-bold hover:border-blue-500 hover:bg-blue-500/5 transition-all text-left group">
+                            <span className="text-blue-500 mr-2 group-hover:scale-110 inline-block">{o.id}.</span> {o.text}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
-                {checklist.length === 0 && !isGenerating && (
-                  <div className="text-center py-20 border-2 border-dashed border-slate-800 rounded-3xl group cursor-pointer hover:border-slate-700 transition-colors" onClick={() => performAiGeneration(skill.level)}>
-                    <div className="text-slate-700 uppercase font-black tracking-widest text-xs mb-2">Checklist Empty</div>
-                    <p className="text-[10px] font-bold text-slate-800 uppercase tracking-tighter">Click to Generate Path</p>
-                  </div>
-                )}
+                {isChatting && <div className="text-slate-600 text-[10px] font-black uppercase tracking-widest animate-pulse">Consulting the Nexus...</div>}
+                <div ref={chatEndRef} />
               </div>
+              <form onSubmit={e => { e.preventDefault(); handleSendMessage(chatInput); }} className="sticky bottom-0 bg-slate-900 py-4 border-t border-slate-800 flex gap-2">
+                <input type="text" value={chatInput} onChange={e => setChatInput(e.target.value)} disabled={isChatting} placeholder="Identify yourself..." className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-purple-500" />
+                <button type="submit" disabled={isChatting || !chatInput.trim()} className="px-6 bg-purple-600 text-white rounded-xl font-black uppercase tracking-widest text-[10px] active:scale-95 transition-transform">Send</button>
+              </form>
             </div>
           )}
 
-          {/* Level Up Celebration Overlay */}
-          {showLevelUp && (
-            <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-900/95 backdrop-blur-xl animate-in fade-in zoom-in duration-500 px-6 text-center">
-              <div>
-                <div className="text-7xl md:text-8xl mb-6 animate-bounce">🌟</div>
-                <h3 className="text-3xl md:text-5xl font-black text-white mb-2 uppercase italic tracking-tighter">Level Ascended</h3>
-                <p className="text-blue-400 font-black uppercase tracking-widest text-xs md:text-sm animate-pulse mb-6">Now Entering: {getLevelDisplay(skill.level)}</p>
-                <div className="flex flex-col items-center gap-4">
-                  <div className="flex items-center gap-2 text-slate-500 text-xs font-black uppercase tracking-[0.2em]">
-                    <svg className="animate-spin w-4 h-4 text-purple-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                    Re-Architecting Tier...
-                  </div>
-                </div>
+          {isGenerating && (
+            <div className="absolute inset-0 z-40 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center animate-in fade-in">
+              <div className="text-center">
+                <div className="w-16 h-16 border-4 border-purple-500/20 border-t-purple-500 rounded-full animate-spin mx-auto mb-4"></div>
+                <h3 className="text-xl font-black italic uppercase text-white">Architecting Roadmap</h3>
+                <p className="text-[10px] text-slate-500 uppercase tracking-widest font-black animate-pulse">Personalizing to your level...</p>
               </div>
             </div>
           )}
         </div>
 
-        {/* Modal Footer Info */}
-        <div className="px-4 md:px-8 py-3 md:py-4 bg-slate-950/80 border-t border-slate-800 text-[8px] md:text-[10px] text-slate-600 font-black uppercase tracking-[0.2em] flex justify-between items-center shrink-0 mb-[env(safe-area-inset-bottom)]">
-          <div className="flex gap-4">
-             <span>{content.length} CHARS</span>
-             {checklist.length > 0 && <span className="text-blue-500">{checklist.filter(i => i.completed).length}/{checklist.length} DONE</span>}
-          </div>
-          <span className="text-slate-700">Gemini Pro Architect</span>
+        <div className="px-6 py-3 bg-slate-950/80 border-t border-slate-800 text-[9px] text-slate-600 font-black uppercase tracking-[0.2em] flex justify-between items-center">
+          <span>{isVoiceActive ? 'Voice Link Established' : viewMode === 'chat' ? 'Diagnostic Phase' : 'Pathway Active'}</span>
+          {isSaving && <span className="text-blue-500">Syncing...</span>}
         </div>
       </div>
     </div>

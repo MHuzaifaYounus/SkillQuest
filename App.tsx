@@ -13,6 +13,7 @@ const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isInitialFetch, setIsInitialFetch] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [newSkillName, setNewSkillName] = useState('');
   const [draggedSkill, setDraggedSkill] = useState<Skill | null>(null);
@@ -23,15 +24,28 @@ const App: React.FC = () => {
   // Initialize DB and Check Session
   useEffect(() => {
     const bootstrap = async () => {
+      // Small artificial delay for aesthetics of the "Starting" screen
+      const start = Date.now();
       await initDb();
       const savedUser = localStorage.getItem('skillquest-session');
+      
+      const elapsed = Date.now() - start;
+      const minLoaderTime = 1500;
+      if (elapsed < minLoaderTime) {
+        await new Promise(r => setTimeout(r, minLoaderTime - elapsed));
+      }
+
       if (savedUser) {
         const u = JSON.parse(savedUser);
         setUser(u);
+        setIsInitialFetch(true);
+        setIsLoading(false);
         const data = await fetchUserSkills(u.id);
         setSkills(data);
+        setIsInitialFetch(false);
+      } else {
+        setIsLoading(false);
       }
-      setIsLoading(false);
     };
     bootstrap();
   }, []);
@@ -40,8 +54,10 @@ const App: React.FC = () => {
     localStorage.setItem('skillquest-session', JSON.stringify(u));
     setUser(u);
     setShowAuth(false);
+    setIsInitialFetch(true);
     const data = await fetchUserSkills(u.id);
     setSkills(data);
+    setIsInitialFetch(false);
   };
 
   const handleLogout = () => {
@@ -126,7 +142,34 @@ const App: React.FC = () => {
     setDraggedSkill(null);
   };
 
-  if (isLoading) return null;
+  // Initial App Startup Loader
+  if (isLoading) {
+    return (
+      <div className="fixed inset-0 z-[200] bg-slate-950 flex flex-col items-center justify-center p-8 overflow-hidden">
+        {/* Dynamic Background Elements */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full">
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-blue-600/10 rounded-full blur-[120px] animate-pulse"></div>
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] border border-blue-500/5 rounded-full animate-[spin_20s_linear_infinite]"></div>
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] border border-white/5 rounded-full animate-[spin_30s_linear_infinite_reverse]"></div>
+        </div>
+
+        <div className="relative z-10 flex flex-col items-center">
+          <div className="bg-gradient-to-br from-blue-500 to-purple-600 p-5 rounded-3xl shadow-2xl shadow-blue-500/20 mb-8 animate-bounce">
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-12 h-12 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+          </div>
+          <h2 className="text-2xl font-black text-white italic tracking-tighter uppercase mb-2">Getting things ready...</h2>
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-500 animate-pulse">Syncing your progress</span>
+            <div className="flex gap-1">
+              <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce"></div>
+              <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce [animation-delay:0.2s]"></div>
+              <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce [animation-delay:0.4s]"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Unauthenticated View
   if (!user) {
@@ -171,7 +214,7 @@ const App: React.FC = () => {
             </h1>
             <div className="flex items-center gap-2">
               <p className="text-[8px] uppercase tracking-[0.2em] font-black text-slate-500 hidden xs:block">{user.email}</p>
-              {isSyncing && (
+              {(isSyncing || isInitialFetch) && (
                 <div className="flex gap-0.5 items-center">
                    <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce"></div>
                    <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce [animation-delay:0.2s]"></div>
@@ -211,6 +254,7 @@ const App: React.FC = () => {
               key={column.id} 
               column={column} 
               skills={skills.filter(s => s.level === column.id)}
+              isLoading={isInitialFetch}
               onDeleteSkill={deleteSkill}
               onDragStart={handleDragStart}
               onDrop={handleDrop}
@@ -245,7 +289,7 @@ const App: React.FC = () => {
                   type="text" 
                   value={newSkillName}
                   onChange={(e) => setNewSkillName(e.target.value)}
-                  placeholder="New Skill Protocol..."
+                  placeholder="What do you want to learn?"
                   className="w-full bg-transparent border-none text-slate-100 placeholder:text-slate-700 focus:ring-0 outline-none text-sm py-2.5 md:py-3 font-semibold"
                 />
               </div>
@@ -254,7 +298,7 @@ const App: React.FC = () => {
                 disabled={!newSkillName.trim()}
                 className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-black py-2 md:py-2.5 px-4 md:px-6 rounded-lg md:rounded-xl transition-all shadow-lg active:scale-95 text-[10px] md:text-sm uppercase tracking-widest"
               >
-                Create
+                Create Path
               </button>
             </div>
           </form>

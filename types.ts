@@ -29,6 +29,9 @@ export interface Skill {
   notes?: string;
   icon?: string;
   checklist?: ChecklistItem[];
+  mentor_context?: string;
+  mentor_avatar?: string;
+  chat_history?: any[];
 }
 
 export interface Column {
