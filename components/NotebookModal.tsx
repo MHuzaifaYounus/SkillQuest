@@ -81,7 +81,7 @@ const getLevelDisplay = (level: SkillLevel) => {
   }
 };
 
-const cleanJsonResponse = (text: string) => {
+const cleanJsonResponse = (text: string | undefined) => {
   if (!text) return '{}';
   let cleaned = text.replace(/```json/g, '').replace(/```/g, '');
   const start = cleaned.indexOf('{');
@@ -205,8 +205,12 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
               }
             }
           });
-          const data = JSON.parse(cleanJsonResponse(response.text || '{}'));
-          setMessages([{ role: 'model', text: `${data.text}\n\n${data.question}`, mcq: data as MCQ }]);
+          const text = response.text;
+          const data = JSON.parse(cleanJsonResponse(text));
+          if (data && (data.text || data.question)) {
+            const displayMsg = `${data.text || ''}\n\n${data.question || ''}`.trim();
+            setMessages([{ role: 'model', text: displayMsg, mcq: data as MCQ }]);
+          }
         } catch (e) {
           console.error(e);
           setMessages([{ role: 'model', text: `Welcome. I am your mentor for ${skill.name}. What is your experience level?` }]);
@@ -254,8 +258,8 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
             }
           }
         });
-        const data = JSON.parse(cleanJsonResponse(response.text || '{}'));
-        setMessages([...updatedMessages, { role: 'model', text: data.question, mcq: data as MCQ }]);
+        const data = JSON.parse(cleanJsonResponse(response.text));
+        setMessages([...updatedMessages, { role: 'model', text: data.question || "Tell me more.", mcq: data as MCQ }]);
       } 
       // If 4 questions are done, analyze and generate roadmap
       else if (checklist.length === 0 && userCount >= 4) {
@@ -288,16 +292,18 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
             }
           }
         });
-        const result = JSON.parse(cleanJsonResponse(analysisResponse.text || '{}'));
-        const newItems: ChecklistItem[] = result.checklist.map((i: any) => ({
-          id: crypto.randomUUID(),
-          text: i.title,
-          description: i.description,
-          completed: false
-        }));
-        setChecklist(newItems);
-        setMessages([...updatedMessages, { role: 'model', text: `${result.mentor_summary}\n\nI have created your roadmap. Switch to the Checklist tab to begin.` }]);
-        onUpdate(skill.id, { icon: result.icon || '🎯', checklist: newItems, mentor_context: result.mentor_summary });
+        const result = JSON.parse(cleanJsonResponse(analysisResponse.text));
+        if (result && Array.isArray(result.checklist)) {
+          const newItems: ChecklistItem[] = result.checklist.map((i: any) => ({
+            id: crypto.randomUUID(),
+            text: i.title || 'Step',
+            description: i.description || '',
+            completed: false
+          }));
+          setChecklist(newItems);
+          setMessages([...updatedMessages, { role: 'model', text: `${result.mentor_summary || 'Analysis complete.'}\n\nI have created your roadmap. Switch to the Checklist tab to begin.` }]);
+          onUpdate(skill.id, { icon: result.icon || '🎯', checklist: newItems, mentor_context: result.mentor_summary });
+        }
         setIsGenerating(false);
       } 
       // Normal chat mode
@@ -315,7 +321,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
             }
           }
         });
-        const data = JSON.parse(cleanJsonResponse(response.text || '{}'));
+        const data = JSON.parse(cleanJsonResponse(response.text));
         setMessages([...updatedMessages, { role: 'model', text: data.text || "Continue your path." }]);
       }
     } catch (e) {
@@ -353,10 +359,14 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
             scriptProcessor.connect(inputCtx.destination);
           },
           onmessage: async (m) => {
-            const data = m.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
-            if (data) {
+            const serverContent = m.serverContent;
+            const modelTurn = serverContent?.modelTurn;
+            const parts = modelTurn?.parts;
+            const audioData = parts?.[0]?.inlineData?.data;
+            
+            if (audioData) {
               nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputCtx.currentTime);
-              const buffer = await decodeAudioData(decode(data), outputCtx, 24000, 1);
+              const buffer = await decodeAudioData(decode(audioData), outputCtx, 24000, 1);
               const source = outputCtx.createBufferSource();
               source.buffer = buffer;
               source.connect(outputCtx.destination);
