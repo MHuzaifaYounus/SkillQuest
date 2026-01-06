@@ -81,7 +81,7 @@ const getLevelDisplay = (level: SkillLevel) => {
   }
 };
 
-const cleanJsonResponse = (text: string | undefined) => {
+const cleanJsonResponse = (text: string | undefined): string => {
   if (!text) return '{}';
   let cleaned = text.replace(/```json/g, '').replace(/```/g, '');
   const start = cleaned.indexOf('{');
@@ -96,7 +96,6 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
   const [checklist, setChecklist] = useState<ChecklistItem[]>(Array.isArray(skill.checklist) ? skill.checklist : []);
   const [isSaving, setIsSaving] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [showLevelUp, setShowLevelUp] = useState(false);
   const [viewMode, setViewMode] = useState<'checklist' | 'chat'>('checklist');
   const [messages, setMessages] = useState<Message[]>(Array.isArray(skill.chat_history) ? skill.chat_history : []);
   const [chatInput, setChatInput] = useState('');
@@ -113,6 +112,11 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
 
   const [mentorAvatar, setMentorAvatar] = useState(skill.mentor_avatar || '');
   const [isGeneratingAvatar, setIsGeneratingAvatar] = useState(false);
+
+  // Scroll to bottom of chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
   // Sync Checklist
   useEffect(() => {
@@ -144,7 +148,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
           const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
           const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash-image',
-            contents: { parts: [{ text: `A close-up high-quality portrait of a wise grandmaster mentor in ${skill.name}. Cinematic lighting, professional studio photo.` }] },
+            contents: { parts: [{ text: `A photorealistic close-up portrait of a wise grandmaster mentor specialized in ${skill.name}. Highly detailed, cinematic lighting.` }] },
             config: { imageConfig: { aspectRatio: "1:1" } }
           });
           const part = response.candidates?.[0]?.content?.parts.find(p => p.inlineData);
@@ -153,12 +157,12 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
             setMentorAvatar(base64);
             onUpdate(skill.id, { mentor_avatar: base64 });
           }
-        } catch (e) { console.error(e); } finally { setIsGeneratingAvatar(false); }
+        } catch (e) { console.error("Avatar error:", e); } finally { setIsGeneratingAvatar(false); }
       })();
     }
   }, [skill.name, mentorAvatar, isGeneratingAvatar, skill.id, onUpdate]);
 
-  // Auto-switch to chat if no checklist exists (Diagnostic mode)
+  // Auto-switch to chat for diagnostic
   useEffect(() => {
     if (checklist.length === 0 && viewMode === 'checklist') {
       setViewMode('chat');
@@ -174,13 +178,12 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
           const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
           const response = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
-            contents: `Initial diagnostic for ${skill.name}. Tier: ${getLevelDisplay(skill.level)}. Start assessment.`,
+            contents: `Intro for ${skill.name} at ${getLevelDisplay(skill.level)}.`,
             config: {
-              systemInstruction: `You are the Grandmaster Mentor. Before creating a roadmap, you MUST assess the student.
-              1. Start by saying: "I am your mentor for ${skill.name}. To build your roadmap for the ${getLevelDisplay(skill.level)} tier, I must first identify your current level."
-              2. Ask the FIRST of exactly 4 assessment questions.
-              3. Provide 3-4 MCQ options.
-              Return JSON: { "text": "Greeting text", "question": "Question 1", "options": [...] }`,
+              systemInstruction: `You are the Grandmaster Mentor. You must identify the user's level.
+              1. Greet: "I am your mentor for ${skill.name}. To build your roadmap for the ${getLevelDisplay(skill.level)} tier, I must assess your level."
+              2. Ask the FIRST of 4 diagnostic questions. Use MCQs.
+              Return JSON: { "text": "Greeting text", "question": "Question text", "options": [{"id":"A", "text":"...", "feedback":"..."}] }`,
               responseMimeType: "application/json",
               responseSchema: {
                 type: Type.OBJECT,
@@ -204,15 +207,15 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
               }
             }
           });
-          const text = response?.text;
-          const data = JSON.parse(cleanJsonResponse(text));
-          if (data && (data.text || data.question)) {
-            const displayMsg = `${data.text || ''}\n\n${data.question || ''}`.trim();
-            setMessages([{ role: 'model', text: displayMsg, mcq: data as MCQ }]);
+          
+          if (response && response.text) {
+            const data = JSON.parse(cleanJsonResponse(response.text));
+            const introText = `${data.text}\n\n${data.question}`;
+            setMessages([{ role: 'model', text: introText, mcq: data as MCQ }]);
           }
         } catch (e) {
-          console.error("Diagnostic error:", e);
-          setMessages([{ role: 'model', text: `Welcome. I am your mentor for ${skill.name}. Let's assess your level.` }]);
+          console.error("Diagnostic start error:", e);
+          setMessages([{ role: 'model', text: `Welcome. I am your mentor for ${skill.name}. Let's assess your current mastery.` }]);
         } finally { setIsChatting(false); }
       })();
     }
@@ -231,13 +234,13 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
       
-      // DIAGNOSTIC PHASE: 4 questions total
+      // PHASE 1: Diagnostic Questions (1 to 4)
       if (checklist.length === 0 && userCount < 4) {
         const response = await ai.models.generateContent({
           model: 'gemini-3-flash-preview',
-          contents: `Skill: ${skill.name}. User just answered: "${userMessage}". Step: Question ${userCount + 1}.`,
+          contents: `Skill: ${skill.name}. Question ${userCount + 1} of 4. Student answered: "${userMessage}".`,
           config: {
-            systemInstruction: `You are on diagnostic question ${userCount + 1} of 4. Ask the next specific assessment question.
+            systemInstruction: `Ask diagnostic question ${userCount + 1}. Be specific to ${skill.name}. 
             Return JSON: { "question": "...", "options": [...] }`,
             responseMimeType: "application/json",
             responseSchema: {
@@ -256,23 +259,22 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
             }
           }
         });
-        const data = JSON.parse(cleanJsonResponse(response?.text));
-        setMessages([...updatedMessages, { role: 'model', text: data.question || "Tell me more.", mcq: data as MCQ }]);
+        
+        if (response && response.text) {
+          const data = JSON.parse(cleanJsonResponse(response.text));
+          setMessages([...updatedMessages, { role: 'model', text: data.question || "Continue.", mcq: data as MCQ }]);
+        }
       } 
-      // ANALYSIS & ROADMAP GENERATION
+      // PHASE 2: Analysis and Generation
       else if (checklist.length === 0 && userCount >= 4) {
         setIsGenerating(true);
         const analysisResponse = await ai.models.generateContent({
           model: 'gemini-3-flash-preview',
-          contents: `End of assessment for ${skill.name}. Answers: ${JSON.stringify(updatedMessages.filter(m => m.role === 'user').map(m => m.text))}. Tier: ${getLevelDisplay(skill.level)}.`,
+          contents: `Final assessment for ${skill.name}. Box level: ${getLevelDisplay(skill.level)}. Answers: ${JSON.stringify(updatedMessages.filter(m => m.role === 'user').map(m => m.text))}`,
           config: {
-            systemInstruction: `Generate a mastery roadmap based on these assessment answers.
-            The roadmap MUST align with the box level frequency:
-            - Daily: Small repeatable steps.
-            - Weekly: Milestones to check once a week.
-            - Monthly: Long-term targets.
-            - Passive: Maintenance checklist.
-            Return JSON: { "mentor_summary": "Analysis of level", "icon": "emoji", "checklist": [{ "title": "...", "description": "..." }] }`,
+            systemInstruction: `Analyze the user's level. Generate a personalized checklist of 5-8 items.
+            The items must fit the ${getLevelDisplay(skill.level)} box (Daily=Habits, Weekly=Milestones, Monthly=Big Goals).
+            Return JSON: { "mentor_summary": "...", "icon": "emoji", "checklist": [{"title":"...", "description":"..."}] }`,
             responseMimeType: "application/json",
             responseSchema: {
               type: Type.OBJECT,
@@ -291,27 +293,30 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
             }
           }
         });
-        const result = JSON.parse(cleanJsonResponse(analysisResponse?.text));
-        if (result && Array.isArray(result.checklist)) {
-          const newItems: ChecklistItem[] = result.checklist.map((i: any) => ({
-            id: crypto.randomUUID(),
-            text: i.title || 'Step',
-            description: i.description || '',
-            completed: false
-          }));
-          setChecklist(newItems);
-          setMessages([...updatedMessages, { role: 'model', text: `${result.mentor_summary || 'Pathway structured.'}\n\nYour roadmap is ready. See the Checklist tab.` }]);
-          onUpdate(skill.id, { icon: result.icon || '🎯', checklist: newItems, mentor_context: result.mentor_summary });
+        
+        if (analysisResponse && analysisResponse.text) {
+          const result = JSON.parse(cleanJsonResponse(analysisResponse.text));
+          if (result && Array.isArray(result.checklist)) {
+            const newItems: ChecklistItem[] = result.checklist.map((i: any) => ({
+              id: crypto.randomUUID(),
+              text: i.title || 'Task',
+              description: i.description || '',
+              completed: false
+            }));
+            setChecklist(newItems);
+            setMessages([...updatedMessages, { role: 'model', text: `${result.mentor_summary || 'Your path is clear.'}\n\nI have structured your roadmap in the Checklist tab.` }]);
+            onUpdate(skill.id, { icon: result.icon || '🎯', checklist: newItems, mentor_context: result.mentor_summary });
+          }
         }
         setIsGenerating(false);
       } 
-      // NORMAL CHAT
+      // PHASE 3: Normal Chat
       else {
         const response = await ai.models.generateContent({
           model: 'gemini-3-flash-preview',
-          contents: `Chat about ${skill.name}. Context: ${skill.mentor_context}. User: "${userMessage}".`,
+          contents: `Question about ${skill.name}. Student level: ${skill.mentor_context}. User: "${userMessage}".`,
           config: {
-            systemInstruction: "You are the Grandmaster Mentor. Give precise Socratic guidance.",
+            systemInstruction: "You are the Grandmaster Mentor. Provide expert, brief, socratic guidance.",
             responseMimeType: "application/json",
             responseSchema: {
               type: Type.OBJECT,
@@ -320,12 +325,15 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
             }
           }
         });
-        const data = JSON.parse(cleanJsonResponse(response?.text));
-        setMessages([...updatedMessages, { role: 'model', text: data.text || "I see. Continue your practice." }]);
+        
+        if (response && response.text) {
+          const data = JSON.parse(cleanJsonResponse(response.text));
+          setMessages([...updatedMessages, { role: 'model', text: data.text || "Proceed with diligence." }]);
+        }
       }
     } catch (e) {
-      console.error("Chat message error:", e);
-      setMessages([...updatedMessages, { role: 'model', text: "The connection to the mastery nexus is unstable. Try again." }]);
+      console.error("Message handling error:", e);
+      setMessages([...updatedMessages, { role: 'model', text: "The Mastery Nexus is temporarily disconnected. Please try again." }]);
     } finally {
       setIsChatting(false);
     }
@@ -358,7 +366,12 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
             scriptProcessor.connect(inputCtx.destination);
           },
           onmessage: async (m: LiveServerMessage) => {
-            const audioData = m.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+            // Guarding: Safely access deep properties for Vercel build
+            const serverContent = m?.serverContent;
+            const modelTurn = serverContent?.modelTurn;
+            const parts = modelTurn?.parts;
+            const audioData = parts?.[0]?.inlineData?.data;
+            
             if (audioData) {
               nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputCtx.currentTime);
               const buffer = await decodeAudioData(decode(audioData), outputCtx, 24000, 1);
@@ -376,12 +389,12 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
-          systemInstruction: `Socratic mentor for ${skill.name}. Keep responses short and encouraging. Context: ${skill.mentor_context}.`,
+          systemInstruction: `Socratic mentor for ${skill.name}. Short, wise, encouraging.`,
         }
       });
       voiceSessionRef.current = sessionPromise;
     } catch (e) {
-      console.error("Voice connection error:", e);
+      console.error("Voice Error:", e);
       setIsVoiceActive(false);
     }
   };
@@ -486,7 +499,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
                 <div ref={chatEndRef} />
               </div>
               <form onSubmit={e => { e.preventDefault(); handleSendMessage(chatInput); }} className="sticky bottom-0 bg-slate-900 py-4 border-t border-slate-800 flex gap-2">
-                <input type="text" value={chatInput} onChange={e => setChatInput(e.target.value)} disabled={isChatting} placeholder="Type message..." className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-purple-500" />
+                <input type="text" value={chatInput} onChange={e => setChatInput(e.target.value)} disabled={isChatting} placeholder="Identify yourself..." className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-purple-500" />
                 <button type="submit" disabled={isChatting || !chatInput.trim()} className="px-6 bg-purple-600 text-white rounded-xl font-black uppercase tracking-widest text-[10px] active:scale-95 transition-transform">Send</button>
               </form>
             </div>
