@@ -89,7 +89,7 @@ const cleanJsonResponse = (text: string | undefined): string => {
   if (start !== -1 && end !== -1) {
     return cleaned.substring(start, end + 1);
   }
-  return cleaned.trim();
+  return cleaned.trim() || '{}';
 };
 
 const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate }) => {
@@ -151,13 +151,20 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
             contents: { parts: [{ text: `A photorealistic close-up portrait of a wise grandmaster mentor specialized in ${skill.name}. Highly detailed, cinematic lighting.` }] },
             config: { imageConfig: { aspectRatio: "1:1" } }
           });
-          const part = response.candidates?.[0]?.content?.parts.find(p => p.inlineData);
-          if (part?.inlineData) {
-            const base64 = `data:image/png;base64,${part.inlineData.data}`;
-            setMentorAvatar(base64);
-            onUpdate(skill.id, { mentor_avatar: base64 });
+          
+          if (response && response.candidates && response.candidates[0] && response.candidates[0].content) {
+            const part = response.candidates[0].content.parts.find(p => p.inlineData);
+            if (part?.inlineData) {
+              const base64 = `data:image/png;base64,${part.inlineData.data}`;
+              setMentorAvatar(base64);
+              onUpdate(skill.id, { mentor_avatar: base64 });
+            }
           }
-        } catch (e) { console.error("Avatar error:", e); } finally { setIsGeneratingAvatar(false); }
+        } catch (e) { 
+          console.error("Avatar error:", e); 
+        } finally { 
+          setIsGeneratingAvatar(false); 
+        }
       })();
     }
   }, [skill.name, mentorAvatar, isGeneratingAvatar, skill.id, onUpdate]);
@@ -178,12 +185,13 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
           const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
           const response = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
-            contents: `Intro for ${skill.name} at ${getLevelDisplay(skill.level)}.`,
+            contents: `Diagnostic start for ${skill.name}. Box level: ${getLevelDisplay(skill.level)}.`,
             config: {
-              systemInstruction: `You are the Grandmaster Mentor. You must identify the user's level.
-              1. Greet: "I am your mentor for ${skill.name}. To build your roadmap for the ${getLevelDisplay(skill.level)} tier, I must assess your level."
-              2. Ask the FIRST of 4 diagnostic questions. Use MCQs.
-              Return JSON: { "text": "Greeting text", "question": "Question text", "options": [{"id":"A", "text":"...", "feedback":"..."}] }`,
+              systemInstruction: `You are the Grandmaster Mentor. Start an assessment.
+              1. Greet the user. 
+              2. Explain: "I'm your mentor for ${skill.name}. To build your roadmap for the ${getLevelDisplay(skill.level)} tier, I need to identify your level."
+              3. Ask the FIRST of exactly 4 diagnostic MCQ questions.
+              Return JSON: { "text": "Greeting", "question": "Q1", "options": [{"id":"A","text":"...","feedback":"..."}] }`,
               responseMimeType: "application/json",
               responseSchema: {
                 type: Type.OBJECT,
@@ -210,12 +218,12 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
           
           if (response && response.text) {
             const data = JSON.parse(cleanJsonResponse(response.text));
-            const introText = `${data.text}\n\n${data.question}`;
+            const introText = `${data.text || ''}\n\n${data.question || ''}`;
             setMessages([{ role: 'model', text: introText, mcq: data as MCQ }]);
           }
         } catch (e) {
           console.error("Diagnostic start error:", e);
-          setMessages([{ role: 'model', text: `Welcome. I am your mentor for ${skill.name}. Let's assess your current mastery.` }]);
+          setMessages([{ role: 'model', text: `Welcome. I am your mentor for ${skill.name}. Let's assess your level.` }]);
         } finally { setIsChatting(false); }
       })();
     }
@@ -238,9 +246,9 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
       if (checklist.length === 0 && userCount < 4) {
         const response = await ai.models.generateContent({
           model: 'gemini-3-flash-preview',
-          contents: `Skill: ${skill.name}. Question ${userCount + 1} of 4. Student answered: "${userMessage}".`,
+          contents: `Skill: ${skill.name}. Question ${userCount + 1} of 4. User Answer: "${userMessage}".`,
           config: {
-            systemInstruction: `Ask diagnostic question ${userCount + 1}. Be specific to ${skill.name}. 
+            systemInstruction: `You are in diagnostic phase. Ask question ${userCount + 1} of 4. 
             Return JSON: { "question": "...", "options": [...] }`,
             responseMimeType: "application/json",
             responseSchema: {
@@ -265,16 +273,20 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
           setMessages([...updatedMessages, { role: 'model', text: data.question || "Continue.", mcq: data as MCQ }]);
         }
       } 
-      // PHASE 2: Analysis and Generation
+      // PHASE 2: Generation after 4 answers
       else if (checklist.length === 0 && userCount >= 4) {
         setIsGenerating(true);
         const analysisResponse = await ai.models.generateContent({
           model: 'gemini-3-flash-preview',
-          contents: `Final assessment for ${skill.name}. Box level: ${getLevelDisplay(skill.level)}. Answers: ${JSON.stringify(updatedMessages.filter(m => m.role === 'user').map(m => m.text))}`,
+          contents: `Assessment complete for ${skill.name}. Tier: ${getLevelDisplay(skill.level)}. History: ${JSON.stringify(updatedMessages.filter(m => m.role === 'user').map(m => m.text))}`,
           config: {
-            systemInstruction: `Analyze the user's level. Generate a personalized checklist of 5-8 items.
-            The items must fit the ${getLevelDisplay(skill.level)} box (Daily=Habits, Weekly=Milestones, Monthly=Big Goals).
-            Return JSON: { "mentor_summary": "...", "icon": "emoji", "checklist": [{"title":"...", "description":"..."}] }`,
+            systemInstruction: `Create a mastery roadmap. 
+            Checklist must be sized for the ${getLevelDisplay(skill.level)} box:
+            - Daily: Habit-based repeatable tasks.
+            - Weekly: Milestones to hit once a week.
+            - Monthly: Major review/project goals.
+            - Passive: Maintenance reminders.
+            Return JSON: { "mentor_summary": "Analysis of their level", "icon": "emoji", "checklist": [{"title":"...", "description":"..."}] }`,
             responseMimeType: "application/json",
             responseSchema: {
               type: Type.OBJECT,
@@ -299,7 +311,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
           if (result && Array.isArray(result.checklist)) {
             const newItems: ChecklistItem[] = result.checklist.map((i: any) => ({
               id: crypto.randomUUID(),
-              text: i.title || 'Task',
+              text: i.title || 'Step',
               description: i.description || '',
               completed: false
             }));
@@ -314,9 +326,9 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
       else {
         const response = await ai.models.generateContent({
           model: 'gemini-3-flash-preview',
-          contents: `Question about ${skill.name}. Student level: ${skill.mentor_context}. User: "${userMessage}".`,
+          contents: `Skill: ${skill.name}. Context: ${skill.mentor_context}. User: "${userMessage}".`,
           config: {
-            systemInstruction: "You are the Grandmaster Mentor. Provide expert, brief, socratic guidance.",
+            systemInstruction: "You are the Grandmaster Mentor. Give encouraging, socratic advice.",
             responseMimeType: "application/json",
             responseSchema: {
               type: Type.OBJECT,
@@ -328,7 +340,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
         
         if (response && response.text) {
           const data = JSON.parse(cleanJsonResponse(response.text));
-          setMessages([...updatedMessages, { role: 'model', text: data.text || "Proceed with diligence." }]);
+          setMessages([...updatedMessages, { role: 'model', text: data.text || "Continue your journey." }]);
         }
       }
     } catch (e) {
@@ -366,12 +378,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
             scriptProcessor.connect(inputCtx.destination);
           },
           onmessage: async (m: LiveServerMessage) => {
-            // Guarding: Safely access deep properties for Vercel build
-            const serverContent = m?.serverContent;
-            const modelTurn = serverContent?.modelTurn;
-            const parts = modelTurn?.parts;
-            const audioData = parts?.[0]?.inlineData?.data;
-            
+            const audioData = m?.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
             if (audioData) {
               nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputCtx.currentTime);
               const buffer = await decodeAudioData(decode(audioData), outputCtx, 24000, 1);
