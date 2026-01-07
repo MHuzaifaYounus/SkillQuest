@@ -152,8 +152,10 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
             config: { imageConfig: { aspectRatio: "1:1" } }
           });
           
-          if (response && response.candidates && response.candidates[0] && response.candidates[0].content) {
-            const part = response.candidates[0].content.parts.find(p => p.inlineData);
+          const candidate = response?.candidates?.[0];
+          const parts = candidate?.content?.parts;
+          if (parts) {
+            const part = parts.find(p => p.inlineData);
             if (part?.inlineData) {
               const base64 = `data:image/png;base64,${part.inlineData.data}`;
               setMentorAvatar(base64);
@@ -216,10 +218,15 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
             }
           });
           
-          if (response && response.text) {
-            const data = JSON.parse(cleanJsonResponse(response.text));
-            const introText = `${data.text || ''}\n\n${data.question || ''}`;
-            setMessages([{ role: 'model', text: introText, mcq: data as MCQ }]);
+          const responseText = response?.text;
+          if (responseText) {
+            try {
+              const data = JSON.parse(cleanJsonResponse(responseText));
+              const introText = `${data.text || ''}\n\n${data.question || ''}`;
+              setMessages([{ role: 'model', text: introText, mcq: data as MCQ }]);
+            } catch (parseErr) {
+              setMessages([{ role: 'model', text: `Welcome. I am your mentor for ${skill.name}. Let's assess your level.` }]);
+            }
           }
         } catch (e) {
           console.error("Diagnostic start error:", e);
@@ -268,9 +275,14 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
           }
         });
         
-        if (response && response.text) {
-          const data = JSON.parse(cleanJsonResponse(response.text));
-          setMessages([...updatedMessages, { role: 'model', text: data.question || "Continue.", mcq: data as MCQ }]);
+        const responseText = response?.text;
+        if (responseText) {
+          try {
+            const data = JSON.parse(cleanJsonResponse(responseText));
+            setMessages([...updatedMessages, { role: 'model', text: data.question || "Continue.", mcq: data as MCQ }]);
+          } catch (e) {
+            setMessages([...updatedMessages, { role: 'model', text: "Please continue. Tell me more about your experience." }]);
+          }
         }
       } 
       // PHASE 2: Generation after 4 answers
@@ -306,18 +318,23 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
           }
         });
         
-        if (analysisResponse && analysisResponse.text) {
-          const result = JSON.parse(cleanJsonResponse(analysisResponse.text));
-          if (result && Array.isArray(result.checklist)) {
-            const newItems: ChecklistItem[] = result.checklist.map((i: any) => ({
-              id: crypto.randomUUID(),
-              text: i.title || 'Step',
-              description: i.description || '',
-              completed: false
-            }));
-            setChecklist(newItems);
-            setMessages([...updatedMessages, { role: 'model', text: `${result.mentor_summary || 'Your path is clear.'}\n\nI have structured your roadmap in the Checklist tab.` }]);
-            onUpdate(skill.id, { icon: result.icon || '🎯', checklist: newItems, mentor_context: result.mentor_summary });
+        const responseText = analysisResponse?.text;
+        if (responseText) {
+          try {
+            const result = JSON.parse(cleanJsonResponse(responseText));
+            if (result && Array.isArray(result.checklist)) {
+              const newItems: ChecklistItem[] = result.checklist.map((i: any) => ({
+                id: crypto.randomUUID(),
+                text: i.title || 'Step',
+                description: i.description || '',
+                completed: false
+              }));
+              setChecklist(newItems);
+              setMessages([...updatedMessages, { role: 'model', text: `${result.mentor_summary || 'Your path is clear.'}\n\nI have structured your roadmap in the Checklist tab.` }]);
+              onUpdate(skill.id, { icon: result.icon || '🎯', checklist: newItems, mentor_context: result.mentor_summary });
+            }
+          } catch (e) {
+            setMessages([...updatedMessages, { role: 'model', text: "I have processed your assessment. Let's start with some foundational steps." }]);
           }
         }
         setIsGenerating(false);
@@ -338,9 +355,14 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
           }
         });
         
-        if (response && response.text) {
-          const data = JSON.parse(cleanJsonResponse(response.text));
-          setMessages([...updatedMessages, { role: 'model', text: data.text || "Continue your journey." }]);
+        const responseText = response?.text;
+        if (responseText) {
+          try {
+            const data = JSON.parse(cleanJsonResponse(responseText));
+            setMessages([...updatedMessages, { role: 'model', text: data.text || "Continue your journey." }]);
+          } catch (e) {
+            setMessages([...updatedMessages, { role: 'model', text: "Wise words. Continue your path with diligence." }]);
+          }
         }
       }
     } catch (e) {
@@ -365,7 +387,7 @@ const NotebookModal: React.FC<NotebookModalProps> = ({ skill, onClose, onUpdate 
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const sessionPromise = ai.live.connect({
-        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+        model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         callbacks: {
           onopen: () => {
             const source = inputCtx.createMediaStreamSource(stream);

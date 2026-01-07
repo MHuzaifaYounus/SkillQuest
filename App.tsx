@@ -99,7 +99,8 @@ const App: React.FC = () => {
         contents: `Assign a single relevant emoji icon for a skill named "${name}". Return only the emoji.`,
         config: { temperature: 0.5 }
       });
-      const icon = response.text?.trim().split(' ')[0] || '🎯';
+      
+      const icon = response?.text?.trim()?.split(' ')[0] || '🎯';
       const updatedSkill = { ...newSkill, icon };
       setSkills(prev => prev.map(s => s.id === skillId ? updatedSkill : s));
       await upsertSkill(user.id, updatedSkill);
