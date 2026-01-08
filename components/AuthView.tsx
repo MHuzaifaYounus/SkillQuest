@@ -209,7 +209,8 @@ const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated }) => {
       <div className="relative w-full max-w-md bg-slate-900/50 backdrop-blur-2xl border border-slate-800 p-8 rounded-[32px] shadow-2xl transition-all duration-500">
         <div className="text-center mb-8">
           <div className="inline-flex bg-gradient-to-br from-blue-500 to-purple-600 p-3 rounded-2xl shadow-lg mb-4">
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+            {/* Updated Auth Icon to Compass */}
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
           </div>
           <h1 className="text-3xl font-black text-white italic tracking-tighter uppercase">
             {step === 'verify' ? 'Check Your Inbox' : step === 'login' ? 'Welcome Back' : 'Join SkillQuest'}
